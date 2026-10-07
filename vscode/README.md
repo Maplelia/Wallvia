@@ -13,9 +13,9 @@
 
 </div>
 
-<img src="images/vscode-glass-verified.png" alt="VS Code 实测：壁纸在编辑区背后透出" width="100%">
+<img src="images/vscode-wallpaper-settings.jpg" alt="VS Code 实测：壁纸铺满窗口，Wallvia 设置面板显示注入状态与本机壁纸库" width="100%">
 
-<sub>VS Code 实测：壁纸铺满窗口，活动栏 / 标题栏 / 状态栏透明，编辑器半透明，侧栏与面板带压暗洗色。</sub>
+<sub>VS Code 实测：壁纸铺满窗口，活动栏 / 标题栏 / 状态栏透明，编辑器半透明；右侧是 Wallvia 设置面板（注入状态、本机壁纸库、效果滑杆与开关）。</sub>
 
 ---
 

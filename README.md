@@ -15,9 +15,9 @@
 
 </div>
 
-<img src="vscode/images/vscode-glass-verified.png" alt="VS Code：壁纸在编辑区背后透出" width="100%">
+<img src="vscode/images/vscode-wallpaper-settings.jpg" alt="VS Code：壁纸铺满窗口，Wallvia 设置面板显示注入状态与本机壁纸库" width="100%">
 
-<sub>VS Code：壁纸在编辑区背后透出，文件树与面板是毛玻璃，文字依然可读。</sub>
+<sub>VS Code：壁纸铺满窗口，活动栏与面板透明；右侧的 Wallvia 设置面板里能看到注入状态、本机 Wallpaper Engine 壁纸库（已找到 14 张）和各项效果。</sub>
 
 ---
 
@@ -52,7 +52,7 @@
 
 | VS Code | Obsidian | Codex |
 |:--:|:--:|:--:|
-| <img src="vscode/images/vscode-glass-verified.png" width="240"> | <img src="obsidian/obsidian-workspace.jpg" width="240"> | <img src="codex/images/codex-glass-verified.png" width="240"> |
+| <img src="vscode/images/vscode-wallpaper-settings.jpg" width="240"> | <img src="obsidian/obsidian-workspace.jpg" width="240"> | <img src="codex/images/codex-glass-verified.png" width="240"> |
 
 Obsidian 的浮动面板与壁纸列表：
 
