@@ -261,6 +261,9 @@ module.exports = {
   TFile,
   Platform,
   normalizePath,
+  // The declarative settings API is 1.13.0+; this fixture models an older
+  // app, so the plugin keeps rendering through display().
+  requireApiVersion: () => false,
   // Test helpers (not part of the real API).
   createMockElement,
   byClass,

@@ -26,8 +26,11 @@ import {
   Plugin,
   PluginSettingTab,
   Setting,
+  SettingDefinition,
+  SettingDefinitionItem,
   TFile,
   normalizePath,
+  requireApiVersion,
 } from "obsidian";
 import {
   WeSourceSize,
@@ -1060,13 +1063,33 @@ function previewMime(path: string): string {
 
 // ---------------------------------------------------------------- settings
 
+
+/**
+ * Control keys whose change must rebuild the tab, matching the imperative rows
+ * that used to call `commit()`. The rest only persist — a slider must not
+ * re-render mid-drag.
+ */
+const REBUILD_KEYS: ReadonlySet<string> = new Set(["enabled", "fit", "hires", "videoFrames"]);
+
+/** `[{value,label}]` → the plain map the declarative dropdown wants. */
+function dropdownOptions(
+  list: ReadonlyArray<{ value: string; label: string }>
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const option of list) out[option.value] = option.label;
+  return out;
+}
+
 class WallpaperSettingTab extends PluginSettingTab {
   plugin: WallpaperPlugin;
+
 
   constructor(app: App, plugin: WallpaperPlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }
+
+  // ----------------------------------------------------------- persistence
 
   /** Persist the change; sliders must not re-render mid-drag. */
   private async persist(): Promise<void> {
@@ -1077,7 +1100,244 @@ class WallpaperSettingTab extends PluginSettingTab {
   /** Persist and refresh the tab (for controls whose preview changes). */
   private async commit(): Promise<void> {
     await this.persist();
-    this.display();
+    this.refresh();
+  }
+
+  /**
+   * Re-render through whichever API this app version offers. On 1.13+ the
+   * framework owns the page, so `update()` is the refresh entry point; before
+   * 1.13 `display()` was. The 1.13 typings mark `display()` deprecated, so it
+   * is reached through a locally declared, non-deprecated view of the same
+   * method rather than through an eslint suppression.
+   */
+  private refresh(): void {
+    // The test has to be this exact shape: `obsidianmd/no-unsupported-api`
+    // only recognises a literal `requireApiVersion("1.13.0")` in the same
+    // statement (an if-test, a ternary consequent, or the left of `&&`), and
+    // reports `update()` as unavailable API for anything else.
+    if (requireApiVersion("1.13.0")) {
+      this.update();
+      return;
+    }
+    (this as unknown as { display(): void }).display();
+  }
+
+  // ------------------------------------------ declarative settings (1.13+)
+
+  /** Read a control's value out of the plugin's settings. */
+  getControlValue(key: string): unknown {
+    return (this.plugin.settings as unknown as Record<string, unknown>)[key];
+  }
+
+  /** Persist a control change, plus the side effects its row used to carry. */
+  async setControlValue(key: string, value: unknown): Promise<void> {
+    const s = this.plugin.settings as unknown as Record<string, unknown>;
+    s[key] = key === "fit" ? normalizeFit(value) : value;
+    await this.persist();
+    if (REBUILD_KEYS.has(key)) this.refresh();
+  }
+
+  /**
+   * Every row of the page, declaratively. Obsidian 1.13+ renders this instead
+   * of `display()`; older builds never call it. Rows that hold more than one
+   * control (the image picker, the wash pair) or a custom element (the preview,
+   * the async status line) use the `render` escape hatch, because
+   * `SettingDefinitionControl` binds exactly one `control` per row.
+   */
+  getSettingDefinitions(): SettingDefinitionItem[] {
+    const s = this.plugin.settings;
+    const items: SettingDefinitionItem[] = [
+      {
+        name: LABELS.enable,
+        desc: DESCS.enable,
+        control: { key: "enabled", type: "toggle" },
+      },
+      this.imageDefinition(),
+      {
+        name: LABELS.fit,
+        desc: DESCS.fit,
+        control: {
+          key: "fit",
+          type: "dropdown",
+          options: dropdownOptions(FIT_OPTIONS),
+        },
+      },
+      this.sliderDefinition(LABELS.dim, DESCS.dim, "dim", 0, 1, 0.05),
+      this.sliderDefinition(LABELS.glass, DESCS.glass, "glass", 0, 100, 1),
+      this.sliderDefinition(LABELS.embed, DESCS.embed, "embed", 0, 100, 1),
+      this.sliderDefinition(LABELS.blur, DESCS.blur, "blur", 0, 40, 1),
+      this.sliderDefinition(LABELS.opacity, DESCS.opacity, "opacity", 0, 1, 0.05),
+      this.washDefinition(),
+      {
+        name: "恢复默认效果",
+        desc: "把上面的效果项恢复为默认值;当前壁纸、缓存目录和可选行为不会改变。",
+        action: () => {
+          resetEffects(s);
+          void this.commit();
+        },
+      },
+    ];
+
+    // Node APIs are unavailable on mobile, so the whole section is absent
+    // there instead of offering a button that can never work. Two sibling
+    // top-level groups, because `SettingDefinitionGroup.items` only accepts
+    // settings and pages — groups cannot nest.
+    if (this.plugin.weAvailable()) {
+      items.push({
+        type: "group",
+        heading: WE_NAME,
+        items: [
+          this.wePickerDefinition(),
+          {
+            name: "缓存目录",
+            desc: "复制过来的壁纸预览存放的 vault 目录。",
+            control: {
+              key: "weCacheDir",
+              type: "text",
+              placeholder: DEFAULTS.weCacheDir,
+            },
+          },
+        ],
+      });
+      items.push({
+        type: "group",
+        heading: "可选行为",
+        items: [
+          {
+            name: LABELS.hires,
+            desc: DESCS.hires,
+            control: { key: "hires", type: "toggle" },
+          },
+          {
+            name: LABELS.videoFrames,
+            desc: DESCS.videoFrames,
+            control: { key: "videoFrames", type: "toggle" },
+          },
+          this.sliderDefinition(
+            LABELS.maxImageWidth,
+            DESCS.maxImageWidth,
+            "maxImageWidth",
+            MAX_IMAGE_WIDTH.min,
+            MAX_IMAGE_WIDTH.max,
+            MAX_IMAGE_WIDTH.step
+          ),
+        ],
+      });
+    }
+
+    return items;
+  }
+
+  private sliderDefinition(
+    name: string,
+    desc: string,
+    key: string,
+    min: number,
+    max: number,
+    step: number
+  ): SettingDefinition {
+    return { name, desc, control: { key, type: "slider", min, max, step } };
+  }
+
+  /**
+   * The image row: two buttons in one row plus the preview below it, so it
+   * cannot be a single declarative `control`.
+   */
+  private imageDefinition(): SettingDefinition {
+    const s = this.plugin.settings;
+    return {
+      name: LABELS.image,
+      desc: DESCS.image,
+      render: (setting) => {
+        setting.addButton((b) =>
+          b.setButtonText("选择图片…").onClick(() => {
+            new ImagePicker(this.app, (p) => {
+              s.image = p;
+              s.enabled = true;
+              void this.commit();
+            }).open();
+          })
+        );
+        setting.addButton((b) =>
+          b.setButtonText("清除").onClick(() => {
+            s.image = "";
+            void this.commit();
+          })
+        );
+        // The preview is not a declarative control: it is a custom element
+        // whose URL can fail to resolve. It belongs under the row, in the same
+        // list the row itself was appended to.
+        this.appendPreview(setting.settingEl.parentElement ?? this.containerEl);
+      },
+    };
+  }
+
+  /** The wash row: a dropdown *and* a colour picker, one gesture each. */
+  private washDefinition(): SettingDefinition {
+    const s = this.plugin.settings;
+    return {
+      name: LABELS.wash,
+      desc: DESCS.wash,
+      render: (setting) => {
+        setting.addDropdown((d) => {
+          for (const option of WASH_OPTIONS) d.addOption(option.value, option.label);
+          return d.setValue(s.wash).onChange((v) => {
+            s.wash = v as WPWash;
+            void this.commit();
+          });
+        });
+        setting.addColorPicker((p) =>
+          p.setValue(s.washColor).onChange((v) => {
+            // Picking a colour is also choosing custom mode, so the gesture
+            // cannot silently do nothing.
+            s.washColor = v;
+            s.wash = "custom";
+            void this.commit();
+          })
+        );
+      },
+    };
+  }
+
+  /** The Wallpaper Engine picker button plus the async status line under it. */
+  private wePickerDefinition(): SettingDefinition {
+    return {
+      name: "选择已下载的壁纸",
+      desc: WE_PICK_DESC,
+      render: (setting) => {
+        setting.addButton((b) =>
+          b.setButtonText(WE_PICK_BUTTON).onClick(() => {
+            void this.plugin.pickWallpaperEngine();
+          })
+        );
+        const host = setting.settingEl.parentElement ?? this.containerEl;
+        const statusEl = host.createDiv({ cls: "wallvia-we-status" });
+        statusEl.setText("正在检测已下载的壁纸…");
+        void this.showWeStatus(statusEl);
+      },
+    };
+  }
+
+  /**
+   * The preview under the image row. Resolution is defensive on purpose: the
+   * effect controls *below* the preview are what the preview is for, so a
+   * failure here must never end up hiding them.
+   */
+  private appendPreview(host: HTMLElement): void {
+    const s = this.plugin.settings;
+    const resource = this.resourceUrl(s.image);
+    if (resource) {
+      const el = host.createDiv({ cls: "wallvia-preview" });
+      el.style.backgroundImage = `url("${resource}")`;
+      // No inline background-size: styles.css pins the preview to `contain` so
+      // the whole image is visible whatever the wallpaper's own fit is.
+      el.style.opacity = String(s.opacity);
+    } else if (s.image) {
+      host.createDiv({
+        cls: "wallvia-preview wallvia-preview-missing",
+        text: "找不到图片:" + s.image,
+      });
+    }
   }
 
   /**
@@ -1100,6 +1360,8 @@ class WallpaperSettingTab extends PluginSettingTab {
       return "";
     }
   }
+
+  // --------------------------------- imperative fallback (Obsidian < 1.13)
 
   display() {
     const { containerEl } = this;
@@ -1135,22 +1397,7 @@ class WallpaperSettingTab extends PluginSettingTab {
         })
       );
 
-    // Preview of the current image. Resolution is defensive on purpose: the
-    // effect controls *below* the preview are what the preview is for, so a
-    // failure here must never end up hiding them.
-    const resource = this.resourceUrl(s.image);
-    if (resource) {
-      const el = containerEl.createDiv({ cls: "wallvia-preview" });
-      el.style.backgroundImage = `url("${resource}")`;
-      // No inline background-size: styles.css pins the preview to `contain` so
-      // the whole image is visible whatever the wallpaper's own fit is.
-      el.style.opacity = String(s.opacity);
-    } else if (s.image) {
-      containerEl.createDiv({
-        cls: "wallvia-preview wallvia-preview-missing",
-        text: "找不到图片:" + s.image,
-      });
-    }
+    this.appendPreview(containerEl);
 
     new Setting(containerEl)
       .setName(LABELS.fit)

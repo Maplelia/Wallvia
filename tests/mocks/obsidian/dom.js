@@ -25,6 +25,12 @@ function createMockElement(tag = "div") {
     tagName: String(tag).toUpperCase(),
     children: [],
     parentEl: null,
+    // The real DOM exposes the parent as `parentElement`. The declarative
+    // settings rows read it to place a custom element under their own row,
+    // so without this the mock would silently exercise only the fallback.
+    get parentElement() {
+      return el.parentEl;
+    },
     textContent: "",
     innerHTML: "",
     title: "",

@@ -38,6 +38,8 @@
   await require("./obsidian-styles.cjs")();
   console.log("\n== obsidian settings tab ==");
   await require("./obsidian-settings-tab.cjs")();
+  console.log("\n== obsidian declarative settings (1.13+) ==");
+  await require("./obsidian-settings-declarative.cjs")();
   console.log("\n== obsidian in-app panel ==");
   await require("./obsidian-panel.cjs")();
   console.log("\n== vscode extension ==");
