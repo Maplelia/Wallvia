@@ -1,0 +1,55 @@
+{
+  "name": "wallvia",
+  "version": "0.2.7",
+  "description": "Bring your Wallpaper Engine everywhere. Mirrors your Wallpaper Engine background into the OpenAI Codex desktop app via CDP (no file patches, no admin).",
+  "type": "module",
+  "license": "MIT",
+  "author": "Maplelia",
+  "keywords": [
+    "wallpaper",
+    "wallpaper-engine",
+    "codex",
+    "background",
+    "glass",
+    "frosted-glass",
+    "cdp",
+    "electron"
+  ],
+  "homepage": "https://github.com/Maplelia/Wallvia/tree/main/codex#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Maplelia/Wallvia.git",
+    "directory": "codex"
+  },
+  "bugs": {
+    "url": "https://github.com/Maplelia/Wallvia/issues"
+  },
+  "bin": {
+    "wallvia": "bin/wallvia"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "start-wallpaper.cmd",
+    "stop-wallpaper.cmd",
+    "install.ps1",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "status": "node src/cli.mjs status",
+    "list": "node src/cli.mjs list",
+    "use": "node src/cli.mjs use",
+    "follow": "node src/cli.mjs follow",
+    "apply": "node src/cli.mjs apply",
+    "watch": "node src/cli.mjs watch",
+    "stop": "node src/cli.mjs stop",
+    "image": "node src/cli.mjs image"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "os": [
+    "win32"
+  ]
+}

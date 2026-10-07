@@ -1,0 +1,9 @@
+# Files that must never ship inside the VSIX.
+# (Without this file vsce warns that it cannot tell what to include.)
+.vscode/**
+.gitignore
+.gitattributes
+node_modules/**
+scripts/**
+*.vsix
+*.tgz

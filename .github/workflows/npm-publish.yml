@@ -1,0 +1,109 @@
+name: Publish CLI to npm
+
+# Publishes codex/ (the `wallvia` npm package) from GitHub's runners, which
+# sidesteps local TLS/DNS interference.
+#
+# Authentication — the first path that is available wins, so migrating between
+# them never breaks a release:
+#
+#   1. OIDC trusted publishing (no long-lived secret). **NOT configured yet.**
+#      `npm trust github …` cannot create it on this account: npm rejects
+#      bypass-2FA granular tokens for account-level changes, so the command
+#      prints a success-looking summary while `npm trust list` returns E403 and
+#      a tokenless publish fails with 404. Create the trust in the npm web UI
+#      while signed in with 2FA:
+#        https://www.npmjs.com/package/wallvia/access  →  Trusted Publisher
+#          Provider GitHub · Repository Maplelia/Wallvia · Workflow npm-publish.yml
+#      Then delete the NPM_TOKEN secret and this job switches to OIDC by itself.
+#   2. The NPM_TOKEN repository secret (currently in use), a **Granular Access
+#      Token** with "All packages", Read and write, and **Bypass 2FA** ticked
+#      (Classic and Automation tokens were revoked on 2025-12-09).
+#
+# The job skips itself when that version is already on npm, so re-tagging or a
+# manual run never fails the build.
+#
+# ⚠️ npm holds a fresh publish in a **staging window** before the version shows
+# up in the registry (minutes; ~17 was observed elsewhere). During it `npm view
+# <pkg>@<version>` 404s even though the publish succeeded, and a second publish
+# fails with `E409 … Cannot publish over previously staged version` — which
+# means the version IS there. 0.2.0 hit exactly this. Both publish steps below
+# therefore treat that E409 as "staged, not visible yet" = success, and the
+# "skip when already published" guard cannot see a staged version either.
+
+on:
+  # 有意只保留手动触发:codex 还没做完,不随 monorepo 的版本标签一起发布。
+  # 之前这里也监听 `push: tags: "*"`,于是任何 tag(包括 Obsidian / VS Code 的)都会触发 npm 发布。
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance + OIDC trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Read the version in codex/package.json
+        id: v
+        run: echo "version=$(node -e 'console.log(require("./codex/package.json").version)')" >> "$GITHUB_OUTPUT"
+
+      - name: Skip when this version is already published
+        id: check
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          if npm view "wallvia@$VERSION" version >/dev/null 2>&1; then
+            echo "have=no" >> "$GITHUB_OUTPUT"
+            echo "wallvia@$VERSION is already on npm — nothing to publish."
+          else
+            echo "have=yes" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Choose the authentication path
+        id: auth
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "path=token" >> "$GITHUB_OUTPUT"
+            echo "NPM_TOKEN secret present — publishing with the granular token."
+          else
+            echo "path=oidc" >> "$GITHUB_OUTPUT"
+            echo "No NPM_TOKEN secret — publishing with OIDC trusted publishing."
+          fi
+
+      - name: Publish (OIDC trusted publishing)
+        if: steps.check.outputs.have == 'yes' && steps.auth.outputs.path == 'oidc'
+        working-directory: codex
+        run: |
+          set +e
+          out=$(npm publish --access public --provenance --registry=https://registry.npmjs.org 2>&1)
+          code=$?
+          echo "$out"
+          if [ "$code" -ne 0 ] && echo "$out" | grep -q "previously staged version"; then
+            echo "::warning::staged by npm, not visible yet — treating as published."
+            exit 0
+          fi
+          exit "$code"
+
+      - name: Publish (NPM_TOKEN secret)
+        if: steps.check.outputs.have == 'yes' && steps.auth.outputs.path == 'token'
+        working-directory: codex
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set +e
+          out=$(npm publish --access public --provenance --registry=https://registry.npmjs.org 2>&1)
+          code=$?
+          echo "$out"
+          if [ "$code" -ne 0 ] && echo "$out" | grep -q "previously staged version"; then
+            echo "::warning::staged by npm, not visible yet — treating as published."
+            exit 0
+          fi
+          exit "$code"

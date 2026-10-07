@@ -1,0 +1,87 @@
+name: Release
+
+# One tag releases every surface of the monorepo:
+#
+#   • Obsidian plugin      -> main.js / manifest.json / styles.css
+#                             (the community directory requires the tag to EQUAL
+#                              the version in manifest.json)
+#   • VS Code extension    -> wallvia-<version>.vsix
+#   • npm CLI `wallvia`    -> handled by the "Publish CLI to npm" workflow
+#
+#   git tag -a 0.1.1 -m "0.1.1" && git push origin 0.1.1
+#
+# The VS Code extension and the Obsidian plugin share this repository, so they
+# share one tag/version stream: bump both with `node scripts/bump-version.mjs`.
+
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write # provenance attestation
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: The tag must equal the manifest version
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          manifest=$(node -p "require('./manifest.json').version")
+          echo "tag=$tag manifest=$manifest"
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::tag '$tag' != manifest.json version '$manifest' — Obsidian installs only work when they match."
+            exit 1
+          fi
+
+      - name: Install plugin dependencies
+        run: npm install
+
+      - name: Build plugin
+        run: npm run build
+
+      - name: Lint (same rules as the community directory scanner)
+        run: |
+          npx eslint --config obsidian/eslint.config.mjs obsidian
+          npx stylelint styles.css
+
+      - name: Package the VS Code extension
+        working-directory: vscode
+        run: |
+          npm install --no-audit --no-fund
+          version=$(node -p "require('./package.json').version")
+          npx --yes @vscode/vsce package --out "wallvia-$version.vsix"
+          ls -la ./*.vsix
+
+      - name: Generate artifact attestation
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
+            vscode/*.vsix
+
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" --clobber \
+              main.js manifest.json styles.css vscode/*.vsix
+          else
+            gh release create "$tag" \
+              --title="$tag" \
+              --draft \
+              main.js manifest.json styles.css vscode/*.vsix
+          fi

@@ -1,0 +1,12 @@
+node_modules/
+*.log
+.DS_Store
+
+# Release artifacts are attached to GitHub releases, not committed
+*.vsix
+*.tgz
+
+# Local-only material — never publish
+.secrets/
+.npm-cache/
+tests/.tmp-install/

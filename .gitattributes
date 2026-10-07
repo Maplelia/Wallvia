@@ -1,0 +1,11 @@
+# Normalize line endings: LF in the repository
+* text=auto eol=lf
+
+# Windows batch files must have CRLF in the working tree
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Never let git touch binaries
+*.png binary
+*.jpg binary
+*.vsix binary

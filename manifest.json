@@ -1,0 +1,10 @@
+{
+  "id": "wallvia",
+  "name": "Wallvia",
+  "version": "1.0.0",
+  "minAppVersion": "1.4.0",
+  "description": "Bring your Wallpaper Engine everywhere. A frosted-glass wallpaper for your workspace.",
+  "author": "Maplelia",
+  "authorUrl": "https://github.com/Maplelia",
+  "isDesktopOnly": false
+}

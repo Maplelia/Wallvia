@@ -1,0 +1,175 @@
+{
+  "name": "wallvia",
+  "displayName": "Wallvia",
+  "description": "Bring your Wallpaper Engine everywhere. Choose an image file, or any wallpaper Wallpaper Engine has already downloaded — it becomes the workbench background behind a frosted-glass, translucent editor.",
+  "version": "1.0.0",
+  "publisher": "wallvia",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Maplelia/Wallvia.git",
+    "directory": "vscode"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "命令在受限模式(工作区未受信任)下也会显示并给出提示，但写入 VS Code 安装目录的壁纸补丁只在受信任的工作区里执行。"
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "需要本地文件系统：读取本地图片与 Wallpaper Engine 目录，并写入 VS Code 安装目录。"
+    }
+  },
+  "categories": [
+    "Themes",
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "wallpaper",
+    "wallpaper-engine",
+    "background",
+    "glass",
+    "frosted",
+    "wallvia"
+  ],
+  "activationEvents": [
+    "onCommand:wallvia.pickWE",
+    "onCommand:wallvia.set",
+    "onCommand:wallvia.clear",
+    "onCommand:wallvia.toggleGlass",
+    "onCommand:wallvia.openUI",
+    "onCommand:wallvia.status",
+    "onStartupFinished"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "wallvia.pickWE",
+        "title": "Wallvia: Choose Wallpaper Engine Wallpaper…"
+      },
+      {
+        "command": "wallvia.set",
+        "title": "Wallvia: Choose Image File…"
+      },
+      {
+        "command": "wallvia.clear",
+        "title": "Wallvia: Remove Wallpaper"
+      },
+      {
+        "command": "wallvia.toggleGlass",
+        "title": "Wallvia: Toggle Glass Effect"
+      },
+      {
+        "command": "wallvia.openUI",
+        "title": "Wallvia: Open Settings Panel"
+      },
+      {
+        "command": "wallvia.status",
+        "title": "Wallvia: Show Status"
+      },
+      {
+        "command": "wallvia.restore",
+        "title": "Wallvia: Restore Original workbench.html"
+      }
+    ],
+    "configuration": {
+      "title": "Wallvia",
+      "properties": {
+        "wallvia.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether the wallpaper background is shown."
+        },
+        "wallvia.dim": {
+          "type": "number",
+          "default": 45,
+          "minimum": 0,
+          "maximum": 80,
+          "description": "Darkening overlay strength (0-80%). 45 keeps text readable on bright images."
+        },
+        "wallvia.glass": {
+          "type": "number",
+          "default": 55,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Glass translucency strength (0-100%). Higher = more see-through editor surfaces."
+        },
+        "wallvia.blur": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 12,
+          "description": "已停用(历史遗留键,仅为让老配置不报错):本版本不做光学模糊,毛玻璃只由「透明 + 洗色」构成。",
+          "deprecationMessage": "本版本不支持:任何 backdrop-filter 都会让 Chromium 每帧重绘整个窗口(实测明显卡顿)。改这个值不会有任何效果。"
+        },
+        "wallvia.mode": {
+          "type": "string",
+          "enum": [
+            "glass",
+            "fade"
+          ],
+          "default": "glass",
+          "description": "glass = translucent editor surfaces + dim layer; fade = light overlay on top of content (low maintenance, most reliable)."
+        },
+        "wallvia.fit": {
+          "type": "string",
+          "enum": [
+            "cover",
+            "contain",
+            "fill",
+            "center"
+          ],
+          "enumDescriptions": [
+            "覆盖 Cover — fill the window, cropping whatever does not fit",
+            "包含 Contain — no cropping: the whole image is shown, letterboxed",
+            "填充 Fill — stretch to the exact window size (may distort)",
+            "居中 Center — original size, centred"
+          ],
+          "default": "cover",
+          "description": "Alignment of the wallpaper. The legacy value (tile) still renders but is no longer offered."
+        },
+        "wallvia.autoReapply": {
+          "type": "boolean",
+          "default": true,
+          "description": "Re-apply the wallpaper patch automatically after a VS Code update."
+        },
+        "wallvia.hires": {
+          "type": "boolean",
+          "default": true,
+          "description": "取出场景包(scene.pkg)内的原始分辨率大图。关闭后只用 801–1024px 的预览图。"
+        },
+        "wallvia.videoFrames": {
+          "type": "boolean",
+          "default": true,
+          "description": "视频壁纸用编辑器自带的 Chromium 抽一帧作为静态图(不需要 ffmpeg)。关闭后使用其预览图。"
+        },
+        "wallvia.liveApply": {
+          "type": "boolean",
+          "default": true,
+          "description": "改动立即生效:注入的脚本会就地替换样式表,不再重载整个窗口。关闭后需要手动重载。"
+        },
+        "wallvia.themeAware": {
+          "type": "boolean",
+          "default": true,
+          "description": "压暗层的颜色跟随主题明暗(暗色主题用近黑,亮色主题用近白),避免亮色主题被压成灰黑。"
+        },
+        "wallvia.maxImageWidth": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 7680,
+          "description": "绘制用的最大图源宽度(px)。0 = 用场景包里最清晰的一级、视频卡片帧 960;设成 1920/2560 可显著降低显存与解码开销(4K 图解码后约 33MB),设大值则让视频卡片帧一起变清晰。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "node ./scripts/verify.js"
+  },
+  "devDependencies": {}
+}

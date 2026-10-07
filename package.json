@@ -1,0 +1,33 @@
+{
+  "name": "wallvia",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bring your Wallpaper Engine everywhere. Monorepo: the Obsidian plugin's sources in obsidian/ (bundled to the root), the VS Code extension in vscode/, the npm CLI in codex/.",
+  "license": "MIT",
+  "author": "Maplelia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Maplelia/Wallvia.git"
+  },
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -p obsidian/tsconfig.json -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "lint": "eslint --config obsidian/eslint.config.mjs obsidian && stylelint styles.css",
+    "lint:fix": "eslint --config obsidian/eslint.config.mjs obsidian --fix && stylelint styles.css --fix",
+    "test": "node tests/run-all.cjs",
+    "bump": "node scripts/bump-version.mjs",
+    "package:vscode": "cd vscode && npx --yes @vscode/vsce package",
+    "publish:codex": "cd codex && npm publish --access public"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.17",
+    "esbuild": "0.25.5",
+    "eslint": "^9.39.4",
+    "eslint-plugin-obsidianmd": "^0.4.2",
+    "obsidian": "latest",
+    "stylelint": "^17.16.0",
+    "stylelint-config-obsidianmd": "^0.1.0",
+    "typescript": "^5.8.3"
+  }
+}
