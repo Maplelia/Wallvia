@@ -11,6 +11,8 @@
 ![VS Code](https://img.shields.io/badge/VS%20Code-%E2%89%A51.80-007ACC)
 ![Dependencies](https://img.shields.io/badge/dependencies-none-3c873a)
 
+中文 · [English](README.md)
+
 </div>
 
 <img src="images/vscode-wallpaper-settings.jpg" alt="VS Code 实测：壁纸铺满窗口，Wallvia 设置面板显示注入状态与本机壁纸库" width="100%">
@@ -27,7 +29,6 @@
 - [使用](#使用)
 - [设置参考](#设置参考)
 - [工作原理](#工作原理)
-- [排障](#排障)
 - [卸载与还原](#卸载与还原)
 - [验证](#验证)
 - [已知限制](#已知限制)
@@ -219,41 +220,6 @@ workbench 里的表面用两种方式被画上颜色，必须分别对付：
 逐条检查「每条给结构表面上色的规则」是否都被上面两套机制之一盖住，所以 VS Code 换版本、改类名时会
 立刻报警，而不是等你发现侧栏又变不透明了。
 
-### 图源解析：为什么不是方形预览
-
-Wallpaper Engine 给场景壁纸只配了一张 **1:1 的 `preview.jpg`**（801–1024 px），直接拿它铺满宽窗口
-既糊又像被裁过。真正的画面在 `scene.pkg` 里，以 mipmap 链形式存在：
-
-```text
-3840×2160 → 1920×1080 → 960×540 → 480×270 → 240×135
-```
-
-扩展按用途取不同级别，全部**按字节复制、不重新编码**：
-
-| 用途 | 取哪一级 |
-|:--|:--|
-| 选择器卡片 | 不小于卡片宽度（640）的最小一级，如 960×540 |
-| 实际绘制的背景 | 最清晰的一级，或受 `wallvia.maxImageWidth` 限制 |
-| 内置 / web 项目（无 `scene.pkg`） | 扫描 `materials/`、`images/`、`textures/`，取最接近 16:9 的宽图 |
-
-抽取结果缓存在 `globalStorage/wallvia.wallvia/thumbs/`，缓存键 = **源文件路径 + size + mtime**，
-所以重复应用同一张不会再读一遍几百 MB 的包；60 天没被访问的条目会自动清理。
-
-> 一个真实世界的坑：`project.json` 里的 `"file"` 对场景壁纸指的是 **`scene.json`**（场景描述），
-> 不是 `scene.pkg`。按扩展名判断「这是不是场景包」会让**所有下载项**都退化成方形预览，
-> 只有「当前壁纸」那条（路径来自 WE 的 `config.json`，正好是 `scene.pkg`）才是宽图。
-> 现在按**目录**判断：目录里有 `scene.pkg` 就用它。
-
-**视频壁纸**走的是另一条路：它自带的那张 `preview.gif/jpg` 是方的（常见 192×192、224×224），
-所以由编辑器自带的 Chromium 打开一个离屏 `<video>`、跳到第 2 秒、画进 canvas、压成 JPEG。
-
-- 角标显示的是**视频容器自己的**分辨率（从 MP4 的 `tkhd` 读出），画面是取到的那一帧；
-- 帧按「路径 + size + mtime + 帧宽」缓存，卡片帧 960 px、背景帧取视频自身宽度（上限 2560），
-  互不覆盖；`wallvia.maxImageWidth` 可以同时调高两者；
-- 缓存放在系统临时目录 `%TEMP%\wallvia-stills\`，**与同作者的 Obsidian 插件共用** ——
-  哪个应用先解出来，另一个直接复用；
-- 解码失败时退回该壁纸的预览图，并把原因写进「输出 → Wallvia」，不会留一张空卡片。
-
 ### 即时生效（不重载窗口）
 
 `workbench.html` 只在窗口启动时读一次，所以早期版本每次改设置都要重载整个窗口。现在
@@ -265,26 +231,6 @@ Wallpaper Engine 给场景壁纸只配了一张 **1:1 的 `preview.jpg`**（801�
 stamp 变了就**就地改写 `<link href>`**，浏览器重新读取样式表，窗口其余部分完全不动。
 （workbench 的 CSP 有 `require-trusted-types-for 'script'`，所以不能用动态插 `<script>` 的方式，
 只能 `fetch` + 改 `href`；`connect-src 'self'` 允许这个 fetch。）
-
-## 排障
-
-先看一处：**输出面板 → 选「Wallvia」**。卡片或解码出问题时会写明是哪张壁纸、哪一步失败。
-
-| 现象 | 原因与处理 |
-|:--|:--|
-| **命令面板搜 `wallvia` 一条命令都没有** | 扩展没有被加载：窗口是**虚拟工作区**（清单里 `virtualWorkspaces: false`），或者在扩展列表里被停用。注意**受限模式不会**造成这个问题 —— 扩展已声明 `capabilities.untrustedWorkspaces: limited`，未受信任时命令照常显示并给出提示，只是写补丁那一步不执行 |
-| 应用后没有任何变化 | 先等 2 秒（即时生效是每 2 秒轮询 stamp）。仍无变化则确认 `wallvia.liveApply` 没被关掉；关掉时跑一次 `Developer: Reload Window` |
-| **侧栏 / 面板还是不透明卡片，壁纸只在编辑器里** | 该窗口是在补丁写入**之前**启动的（`workbench.html` 是旧的）。重载窗口一次；若依旧，说明 VS Code 换了类名，跑 `node tests/vscode-css-weight.cjs` 定位是哪条规则赢了 |
-| 壁纸完全看不见（全黑 / 全透明） | 通过负 `z-index` 放壁纸层会被 workbench 的层叠上下文剪掉。当前实现用 0/1/2 正层；若手工改过 CSS 请检查 |
-| 选壁纸时**缩略图是方图** | 三种情况：① 该壁纸是**视频**且这一帧没解出来（重开选择器会再试，仍失败才退回预览图）；② 是 WE **内置默认项目**，贴图是 DXT/TGA、没有可提取的静图；③ 原画本身就是 4:3 等非宽幅比例，此时忠实显示不裁剪 |
-| 卡片上写「预览无法读取」 | 该卡片的图片缓存坏了。扩展会**自动删掉它并重建一次**；再失败就重开选择器，或用「输出 → Wallvia」看具体原因 |
-| 弹 *"installation appears to be corrupt"* | `checksums` 格式不对（应为无填充 base64）。重新执行一次选图即可修正 |
-| 有壁纸但看不到图 | 图片路径含空格 / 中文且 URI 未编码。本扩展已用 `vscode.Uri` 编码；手工改过 CSS 请检查 `url('...')` |
-| 壁纸只在部分区域出现 | 该区域被不透明元素覆盖，可用 `fade` 模式兜底 |
-| 界面整体偏暗 / 发灰 | `wallvia.dim` 偏大（80 会明显压暗），45 左右即可；亮色主题建议开启 `wallvia.themeAware` |
-| 写入失败 / EACCES | 安装目录只读或企业策略锁定，见「系统要求」 |
-| 与其他背景扩展冲突 | 同时改 `workbench.html` 的扩展请只留一个。装了 `katsute.code-background` 并配置了背景时，Wallvia 启动会明确提示 |
-| 选壁纸较慢（首次） | 首次要为每张壁纸取一次图（场景包解一级几十毫秒、视频抽帧约 0.3 秒），后台逐张生成，不卡界面；之后走缓存 |
 
 ## 卸载与还原
 
@@ -356,7 +302,8 @@ node tests/vscode-css-weight.cjs   # 用真实 VS Code 样式表校验清底权�
 ├── scripts/verify.js        # 发布前一致性检查（vsce 的 prepublish 会调用）
 ├── images/                  # README 截图
 ├── LICENSE
-└── README.md
+├── README.md              # 英文(默认)
+└── README.zh.md           # 中文
 ```
 
 运行时在 VS Code 安装目录里生成（卸载 / 还原时删除）：

@@ -13,6 +13,8 @@
 ![Admin](https://img.shields.io/badge/admin-not%20required-3c873a)
 ![App files](https://img.shields.io/badge/Codex%20app%20files-untouched-3c873a)
 
+中文 · [English](README.md)
+
 </div>
 
 <img src="vscode/images/vscode-wallpaper-settings.jpg" alt="VS Code：壁纸铺满窗口，Wallvia 设置面板显示注入状态与本机壁纸库" width="100%">
@@ -34,8 +36,8 @@
 
 | 平台 | 怎么装 | 怎么实现 | 文档 |
 |:--|:--|:--|:--|
-| **VS Code** | 安装 `wallvia-<版本>.vsix` | 生成 CSS 与即时生效脚本，补丁化 `workbench.html` 并同步官方校验和 | [vscode/README.md](vscode/README.md) |
-| **Obsidian** | BRAT，或把三个文件放进插件目录 | 官方插件 API + CSS 变量，玻璃层画在 `.workspace-leaf-content::before` | [obsidian/README.md](obsidian/README.md) |
+| **VS Code** | 安装 `wallvia-<版本>.vsix` | 生成 CSS 与即时生效脚本，补丁化 `workbench.html` 并同步官方校验和 | [vscode/README.md](vscode/README.zh.md) |
+| **Obsidian** | BRAT，或把三个文件放进插件目录 | 官方插件 API + CSS 变量，玻璃层画在 `.workspace-leaf-content::before` | [obsidian/README.md](obsidian/README.zh.md) |
 | **Codex 桌面版** | `npm i -g wallvia`，或一键脚本 | CDP 运行时注入，不碰应用文件、不需要管理员 | [codex/README.md](codex/README.md) |
 
 三边共用同一个本机壁纸库（创意工坊 / 自制 / 内置）：都支持 **覆盖 / 填充 / 居中**，VS Code 另有 **包含（contain）**，也都能直接挑一张图片当壁纸。

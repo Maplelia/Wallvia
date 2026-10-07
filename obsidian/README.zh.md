@@ -13,6 +13,8 @@
 ![Install](https://img.shields.io/badge/install-BRAT%20%7C%20manual-3c873a)
 ![Wallpaper Engine](https://img.shields.io/badge/Wallpaper%20Engine-local%20library-3c873a)
 
+中文 · [English](README.md)
+
 </div>
 
 <img src="obsidian-workspace.jpg" alt="Obsidian 工作区：壁纸在编辑区背后透出" width="100%">
@@ -39,6 +41,8 @@
 - [效果](#效果)
 - [设置](#设置)
 - [常见问题](#常见问题)
+- [卸载与还原](#卸载与还原)
+- [已知限制](#已知限制)
 - [开发与测试](#开发与测试)
 - [许可](#许可)
 
@@ -292,6 +296,31 @@ Obsidian 无法直接修改跨源 iframe 内部的 CSS，Wallvia 用的是元素
 **找不到 Wallpaper Engine**
 
 选择器支持 Windows + Steam 安装。确认 Steam 或 Wallpaper Engine 已启动，并且项目目录里有 `project.json` 和可用的预览文件。
+
+## 卸载与还原
+
+**卸载**：设置 → 第三方插件，关掉 Wallvia（或直接删除），再删掉 `<你的 vault>/.obsidian/plugins/wallvia/` 即可；用 BRAT 装的就在 BRAT 里移除这个 beta 插件。
+
+关掉插件的那一瞬间就还原了：注入的样式类与 CSS 变量都在 `onunload()` 里清干净，不需要重启 Obsidian，笔记、主题和 CSS 片段都没有被改过。
+
+**它会留下什么**：
+
+| 位置 | 内容 | 怎么处理 |
+|:--|:--|:--|
+| `<vault>/.obsidian/plugins/wallvia/data.json` | 你的各项设置 | 想恢复出厂设置就删掉它 |
+| `<vault>/<缓存目录>/` | 从 Wallpaper Engine 复制过来的预览图，默认放在 `Wallpapers/` | 不再需要就删掉整个目录 |
+
+缓存目录里的文件都带插件自己的前缀，而且**同时只保留一份** —— 换壁纸时会顺手删掉上一条由它复制的预览。所以即便卸载后不清理，最多也只剩一张图；插件**从不**碰你自己的文件。
+
+## 已知限制
+
+- **Wallpaper Engine 选择器仅限桌面端**：那段代码被 `Platform.isDesktop` 守着，移动包里完全惰性、不会加载任何 Node 模块。插件本身在移动端照常可用，只是只能挑 vault 里的图片。
+- **动态内容不会动**：Obsidian 只能画静态背景 —— 场景壁纸取包内原始画面，视频壁纸取一帧静图，都不会播放。
+- **内置 / web 项目没有 `scene.pkg`**：只能扫项目文件夹里的散图，取不到就退回方形 `preview.*`；DXT 压缩的纹理无法解码，同样退回方形预览，图片两侧会露出预览框底色。
+- **首屏读盘**：场景壁纸要读整个 `scene.pkg`（本机 7–10 MB 一个），卡片进入可视区域才开始解析，读盘串行；滚过一圈之后就全走缓存。
+- **嵌入网页的透明要靠「透明 iframe」**：玻璃层画在 `.workspace-leaf-content::before`，而 webview 自己的底色由它内部决定，插件只能尽量配合。
+- **设置页的渲染方式取决于 Obsidian 版本**：1.13 及以上走官方声明式设置，可以被设置搜索命中；1.4–1.12 走传统的 `display()` 渲染，功能一致但搜不到。
+- **最低要求 Obsidian 1.4.0**，Wallpaper Engine 壁纸库需要 Windows 桌面端；只把 vault 里的图片当壁纸的话，哪一端都能用。
 
 ---
 
