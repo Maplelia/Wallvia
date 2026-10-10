@@ -46,6 +46,8 @@ module.exports = {
       return { dispose() {} };
     },
     executeCommand(name) {
+      // Recorded so a test can prove the extension asked for a window reload.
+      (global.__MOCK_EXECUTED__ = global.__MOCK_EXECUTED__ || []).push(name);
       if (commands[name]) return commands[name]();
       return Promise.resolve();
     },
@@ -82,6 +84,11 @@ module.exports = {
       },
       dispose() {},
     }),
+    /** The extension announces the auto-reload here; recorded for tests. */
+    setStatusBarMessage: (text) => {
+      (global.__MOCK_STATUS__ = global.__MOCK_STATUS__ || []).push(text);
+      return { dispose() {} };
+    },
     showOpenDialog: () => Promise.resolve(cfg.pick ? [{ fsPath: cfg.pick }] : []),
     /**
      * QuickPick stub: records the offered items (global.__MOCK_QUICKPICK__)

@@ -595,13 +595,12 @@ async function applyPatch() {
   const imageUri = vscode.Uri.file(imageAbs)
     .with({ scheme: "vscode-file", authority: "vscode-app" })
     .toString();
-  const imageStat = fs.statSync(imageAbs);
 
   // 3) write the css next to workbench.html (skip when unchanged so a
   //    re-apply does not manufacture a bogus "reload needed" state)
   const css = buildCss({
     imageUri,
-    imageVersion: Math.floor(imageStat.mtimeMs) + "-" + imageStat.size,
+    imageVersion: imageVersionOf(imageAbs),
     dim: cfg.get("dim", 45),
     glass: cfg.get("glass", 55),
     mode: cfg.get("mode", "glass"),
@@ -644,6 +643,25 @@ async function applyPatch() {
   await ctx.globalState.update("appliedVersion", vscode.version);
   await ctx.globalState.update("appliedImageRel", imageRel);
   return true;
+}
+
+/**
+ * A cache-busting token for the wallpaper file: a hash of its bytes.
+ *
+ * The token used to be the file's mtime + size, which is wrong here for a
+ * Windows-specific reason: `fs.copyFileSync` **preserves the source's
+ * timestamps**, so re-applying a wallpaper whose cached artwork is unchanged
+ * produced a byte-identical URL — and the renderer reused the bitmap it already
+ * had, making a real change look like nothing happened. A hash changes exactly
+ * when the pixels do, and never otherwise.
+ */
+function imageVersionOf(file) {
+  try {
+    return "h" + crypto.createHash("sha1").update(fs.readFileSync(file)).digest("hex").slice(0, 16);
+  } catch {
+    const stat = fs.statSync(file);
+    return Math.floor(stat.mtimeMs) + "-" + stat.size;
+  }
 }
 
 /**
@@ -2028,11 +2046,46 @@ async function activate(context) {
     if (stale) {
       try {
         await applyPatch();
+        // This window loaded workbench.html *before* that patch existed, so its
+        // document has no <link> and no live-apply script — nothing in it can
+        // ever show the wallpaper. A reload is the only way for it to read the
+        // patched file, so the extension does it itself instead of leaving the
+        // user with a window that silently ignores every change.
+        await reloadForFreshPatch();
       } catch (e) {
         console.warn("wallvia re-apply failed:", e && e.message);
       }
     }
   }
+}
+
+/**
+ * Reload this window so a patch written during this activation takes effect.
+ *
+ * This window loaded `workbench.html` before that patch existed, so its document
+ * has no `<link>` and no live-apply script — nothing inside it can ever show the
+ * wallpaper. A reload is the only way for it to read the patched file, so the
+ * extension does it itself rather than leaving the user with a window that
+ * silently ignores every change.
+ *
+ * Guarded three ways: only with a wallpaper actually applied, only when the user
+ * left `wallvia.autoReloadAfterPatch` on, and never twice inside a minute — so a
+ * patch that somehow stays stale can never turn into a reload loop.
+ */
+async function reloadForFreshPatch() {
+  const cfg = vscode.workspace.getConfiguration(CONFIG_KEY);
+  if (!cfg.get("autoReloadAfterPatch", true)) return;
+  if (!ctx.globalState.get("image", null)) return;
+  if (!cfg.get("enabled", true)) return;
+  const last = Number(ctx.globalState.get("autoReloadAt", 0)) || 0;
+  if (Date.now() - last < 60000) return;
+
+  await ctx.globalState.update("autoReloadAt", Date.now());
+  vscode.window.setStatusBarMessage("Wallvia:补丁已重新写入,正在重载窗口以显示壁纸…", 4000);
+  log("activate: patch was written after this window loaded — reloading it");
+  // Let that message paint before the window goes away.
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  await vscode.commands.executeCommand("workbench.action.reloadWindow");
 }
 
 function deactivate() {}
@@ -2051,4 +2104,5 @@ module.exports.__internals = {
   buildThumb,
   cachedThumb,
   buildHiRes,
+  imageVersionOf,
 };

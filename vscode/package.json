@@ -138,6 +138,11 @@
           "default": true,
           "description": "Re-apply the wallpaper patch automatically after a VS Code update."
         },
+        "wallvia.autoReloadAfterPatch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reload the window once by itself when the patch had to be written after this window had already loaded (typically right after a VS Code update). Turn it off to reload manually with Developer: Reload Window."
+        },
         "wallvia.hires": {
           "type": "boolean",
           "default": true,

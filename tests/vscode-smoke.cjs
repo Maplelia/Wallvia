@@ -585,6 +585,68 @@ async function run() {
   fs.rmSync(frameScratch, { recursive: true, force: true });
   weMod.resetWeCache();
 
+  // 10b) the cache-busting token follows the *pixels*, not the file's clock.
+  //      Windows' copy preserves the source's timestamps, so an mtime-based
+  //      token could repeat for a different wallpaper and the renderer would
+  //      reuse the bitmap it already had — a real change looking like none.
+  const imageA = path.join(STORAGE, "wallpaper-a.png");
+  const imageB = path.join(STORAGE, "wallpaper-b.png");
+  fs.writeFileSync(imageA, Buffer.from("89504e470d0a1a0a0000000d49484452", "hex"));
+  fs.writeFileSync(imageB, Buffer.from("89504e470d0a1a0a0000000d49484452000102", "hex"));
+  const same = new Date("2026-01-01T00:00:00");
+  fs.utimesSync(imageA, same, same);
+  fs.utimesSync(imageB, same, same);
+  assert.notEqual(
+    ext.__internals.imageVersionOf(imageA),
+    ext.__internals.imageVersionOf(imageB),
+    "identical timestamps cannot produce the same token for different bytes"
+  );
+  fs.copyFileSync(imageA, imageB);
+  fs.utimesSync(imageB, same, same);
+  assert.equal(
+    ext.__internals.imageVersionOf(imageA),
+    ext.__internals.imageVersionOf(imageB),
+    "the same bytes always produce the same token, so nothing repaints needlessly"
+  );
+
+  // 10c) a patch written *after* this window loaded can only take effect on a
+  //      reload — the document has no <link> to swap. The extension must ask for
+  //      that reload itself instead of leaving a window that ignores everything.
+  state.set("image", "wallpaper.jpg");
+  state.set("appliedVersion", "1.0.0"); // as if VS Code had just updated
+  state.delete("autoReloadAt");
+  delete global.__MOCK_EXECUTED__;
+  // The mock copies the config at load time, so the live store is the one to set.
+  vscode.__configStore.enabled = true;
+  vscode.__configStore.autoReloadAfterPatch = true;
+  await ext.activate(ctx);
+  assert.ok(
+    (global.__MOCK_EXECUTED__ || []).includes("workbench.action.reloadWindow"),
+    "an update-driven re-patch reloads the window on its own"
+  );
+
+  // …but not twice in a row: the guard exists so a stubbornly stale patch can
+  // never become a reload loop.
+  state.set("appliedVersion", "1.0.0");
+  delete global.__MOCK_EXECUTED__;
+  await ext.activate(ctx);
+  assert.ok(
+    !(global.__MOCK_EXECUTED__ || []).includes("workbench.action.reloadWindow"),
+    "a second activation inside the guard window does not reload again"
+  );
+
+  // …and it honours the opt-out.
+  state.set("appliedVersion", "1.0.0");
+  state.delete("autoReloadAt");
+  delete global.__MOCK_EXECUTED__;
+  vscode.__configStore.autoReloadAfterPatch = false;
+  await ext.activate(ctx);
+  assert.ok(
+    !(global.__MOCK_EXECUTED__ || []).includes("workbench.action.reloadWindow"),
+    "autoReloadAfterPatch=false leaves the reload to the user"
+  );
+  vscode.__configStore.autoReloadAfterPatch = true;
+
   // 10) restore puts the installation back exactly as it was.
   const expectFor = (buf) => crypto.createHash("sha256").update(buf).digest("base64").replace(/=+$/, "");
   await vscode.commands.__commands["wallvia.restore"]();
@@ -630,7 +692,8 @@ async function run() {
   console.log("  marker/link injection, dim=40, glass, checksum, idempotency,");
   console.log("  backup, fade toggle, clear, restore, status, alignment,");
   console.log("  scene.pkg artwork + 16:9 mipmap thumbnails (byte-exact, cached),");
-  console.log("  live apply (script + stamp), theme-aware wash,");
+  console.log("  live apply (script + stamp), content-hashed image token,");
+  console.log("  auto-reload once after an update re-patch, theme-aware wash,");
   console.log("  settings panel (image + effect + optional switches),");
   console.log("  Wallpaper Engine discovery + picker — all verified.");
   fs.rmSync(ROOT, { recursive: true, force: true });

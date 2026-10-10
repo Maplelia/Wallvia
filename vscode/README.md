@@ -150,6 +150,7 @@ In the command palette (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>) type **`w
 | `wallvia.themeAware` | boolean | `true` | The dim layer color follows the theme's light/dark setting |
 | `wallvia.maxImageWidth` | 0-7680 | `0` | Source artwork width cap. `0` = scenes take the sharpest level and video card frames are 960; setting 1920/2560 noticeably cuts VRAM and decoding cost, while a large value also sharpens the video card frames |
 | `wallvia.autoReapply` | boolean | `true` | Re-applies the patch automatically after a VS Code update |
+| `wallvia.autoReloadAfterPatch` | boolean | `true` | Reloads the window once by itself when the patch had to be written *after* this window had already loaded (typically right after a VS Code update). Turn it off to reload manually with `Developer: Reload Window` |
 | `wallvia.blur` | 0-12 | `0` | **Disabled** (the key is kept only so that old configurations do not error): any `backdrop-filter` makes Chromium repaint the whole window every frame, so it is always treated as 0 internally |
 
 ### Graphical settings panel
@@ -232,6 +233,16 @@ change. `applyPatch()` now also writes:
 When the stamp changes, the `<link href>` is **rewritten in place**, the browser re-reads the stylesheet and nothing else in the window moves at all.
 (The workbench CSP has `require-trusted-types-for 'script'`, so inserting a `<script>` dynamically is not an option —
 only `fetch` + changing `href`; `connect-src 'self'` allows that fetch.)
+
+Live apply can only *swap* a `<link>` that is already in the document, which is why one case genuinely needs a reload:
+right after a VS Code update the patched `workbench.html` was written **after** the window had already loaded the pristine
+file, so that window has neither the `<link>` nor the live-apply script, and nothing inside it can be asked to load the
+stylesheet. The extension therefore performs that one reload itself (`wallvia.autoReloadAfterPatch`) instead of leaving
+you with a window that silently ignores every later change.
+
+The wallpaper URL carries a token derived from a **hash of the image bytes**, not from its timestamp: on Windows
+`fs.copyFileSync` preserves the source file's timestamps, so a time-based token could repeat for a different wallpaper and
+the renderer would silently reuse the bitmap it already had.
 
 ## Uninstall and restore
 
