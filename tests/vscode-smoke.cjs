@@ -602,6 +602,16 @@ async function run() {
         }
       })()
   );
+  console.log(
+    "  [smoke] picker typeof=" +
+      typeof picker +
+      " keys=" +
+      (picker ? Object.keys(picker).join("/") : "n/a") +
+      " msgs=" +
+      (picker && picker.__messages ? picker.__messages.length : "MISSING") +
+      " panels=" +
+      (global.__MOCK_PANELS__ || []).map((x) => x.viewType).join(",")
+  );
   const need = (picker.__messages || []).filter((m) => m.type === "needFrame" && m.index === videoIndex).pop();
   assert.ok(need, "the picker asks its webview to decode a frame");
   assert.equal(need.width, 960, "the card frame is requested at the shared 960 px width");
