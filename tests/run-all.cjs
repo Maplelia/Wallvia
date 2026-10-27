@@ -4,6 +4,8 @@
 (async () => {
   console.log("== json manifests ==");
   await require("./validate-json.cjs");
+  console.log("\n== committed artifacts vs sources ==");
+  await require("./artifact-consistency.cjs")();
   console.log("\n== shared core ==");
   await import("./shared-core.mjs");
   console.log("\n== codex modules ==");
@@ -42,14 +44,25 @@
   await require("./obsidian-settings-declarative.cjs")();
   console.log("\n== obsidian in-app panel ==");
   await require("./obsidian-panel.cjs")();
+  console.log("\n== obsidian video wallpaper ==");
+  await require("./obsidian-video.cjs")();
   console.log("\n== vscode extension ==");
   await require("./vscode-smoke.cjs")();
+  console.log("\n== vscode video wallpaper ==");
+  await require("./vscode-video.cjs")();
+  console.log("\n== vscode atomic writes ==");
+  await require("./vscode-atomic-write.cjs")();
   console.log("\n== vscode video frame cache ==");
   await require("./vscode-video-frame.cjs")();
   console.log("\n== vscode video decode (real Chromium) ==");
   await require("./vscode-video-decode.cjs")();
   console.log("\n== vscode CSS weights (real VS Code stylesheet) ==");
   await require("./vscode-css-weight.cjs").run();
+  // Last, because it reloads `vscode/src/*` and the vscode mock from a fresh
+  // module cache (each suite gets its own install tree); running it earlier
+  // would leave the later suites holding stale module instances.
+  console.log("\n== master switch (both platforms) ==");
+  await require("./master-switch.cjs")();
   console.log("\n== cdp live (real Chromium) ==");
   await import("./cdp-live.mjs");
   console.log("\nALL TESTS PASSED");

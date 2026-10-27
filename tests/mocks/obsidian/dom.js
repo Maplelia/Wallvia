@@ -20,9 +20,10 @@ function createMockElement(tag = "div") {
   const classes = new Set();
   const style = {};
   const listeners = new Map();
+  const tagName = String(tag).toUpperCase();
 
   const el = {
-    tagName: String(tag).toUpperCase(),
+    tagName,
     children: [],
     parentEl: null,
     // The real DOM exposes the parent as `parentElement`. The declarative
@@ -167,6 +168,44 @@ function createMockElement(tag = "div") {
     },
   };
 
+  // A `<video>` is only a stub here, but the video-wallpaper layer calls
+  // exactly these members: `play()` (returns a promise, like the real one),
+  // `pause()`, `load()`, `paused`, and the `poster` property. Without them the
+  // layer would throw and the test would be measuring the mock, not the code.
+  if (tagName === "VIDEO") {
+    let paused = true;
+    Object.defineProperties(el, {
+      paused: {
+        get: () => paused,
+        enumerable: true,
+      },
+      play: {
+        value: () => {
+          paused = false;
+          el.dispatch("play", {});
+          return Promise.resolve();
+        },
+        enumerable: false,
+      },
+      pause: {
+        value: () => {
+          paused = true;
+          el.dispatch("pause", {});
+        },
+        enumerable: false,
+      },
+      load: {
+        value: () => el.dispatch("load", {}),
+        enumerable: false,
+      },
+    });
+    el.poster = "";
+    el.muted = true;
+    el.loop = false;
+    el.autoplay = false;
+    el.playsInline = false;
+  }
+
   // `style.setProperty` must not appear as an own enumerable key of `style`
   // when tests read values, so keep it non-enumerable.
   Object.defineProperties(style, {
@@ -198,11 +237,29 @@ function matches(el, selector) {
   return el.tagName === String(selector).toUpperCase();
 }
 
+/**
+ * Descendant-only selectors (`".a video"`), which the plugin uses to reach the
+ * `<video>` inside its layer. The real `querySelector` handles the whole grammar;
+ * this covers exactly what the tests ask for, so a new call site that needs more
+ * fails loudly here instead of silently returning null.
+ */
+function matchesChain(el, parts) {
+  if (!matches(el, parts[parts.length - 1])) return false;
+  let index = parts.length - 2;
+  let node = el.parentEl;
+  while (index >= 0 && node) {
+    if (matches(node, parts[index])) index -= 1;
+    node = node.parentEl;
+  }
+  return index < 0;
+}
+
 function find(root, selector, firstOnly) {
   const out = [];
+  const parts = String(selector).trim().split(/\s+/).filter(Boolean);
   const walk = (node) => {
     for (const child of node.children || []) {
-      if (matches(child, selector)) {
+      if (matchesChain(child, parts)) {
         out.push(child);
         if (firstOnly) return true;
       }
@@ -235,6 +292,8 @@ function installDom() {
     createElement: (tag) => createMockElement(tag),
     addEventListener() {},
     removeEventListener() {},
+    hidden: false,
+    hasFocus: () => true,
   };
   global.window = {
     innerWidth: 1280,
@@ -258,6 +317,8 @@ function installBodyDom() {
     createElement: (tag) => createMockElement(tag),
     addEventListener() {},
     removeEventListener() {},
+    hidden: false,
+    hasFocus: () => true,
   };
   global.window = {
     innerWidth: 1280,

@@ -17,6 +17,10 @@ const os = require("node:os");
 const path = require("node:path");
 const zlib = require("node:zlib");
 
+// The default cache folder is the plugin's own dot-folder, not a
+// `Wallpapers/` folder at the vault root.
+const CACHE = ".obsidian/plugins/wallvia/cache";
+
 // ------------------------------------------------------------------ PNG / PKG
 
 const CRC_TABLE = (() => {
@@ -135,6 +139,7 @@ async function run() {
       containerEl: {},
     },
     vault: {
+      configDir: ".obsidian",
       getFiles: () => [],
       on: (evt) => ({ evt }),
       adapter: {
@@ -197,13 +202,13 @@ async function run() {
   assert.equal(writes.length, 1, "exactly one file written for the scene package");
   assert.equal(
     writes[0][0],
-    "Wallpapers/wallvia-we-9999000001.png",
+    CACHE + "/wallvia-we-9999000001.png",
     "the vault file is named after the artwork's real type"
   );
   const written = Buffer.from(writes[0][1]);
   assert.ok(written.equals(artwork), "the 2000x1000 PNG is copied byte for byte (no re-encoding)");
   assert.ok(notices.some((n) => n.includes("2000×1000")), "the notice reports the source resolution");
-  assert.equal(plugin.settings.image, "Wallpapers/wallvia-we-9999000001.png", "the artwork becomes the background");
+  assert.equal(plugin.settings.image, CACHE + "/wallvia-we-9999000001.png", "the artwork becomes the background");
 
   // --- 2. the PNG must be sliced at IEND, not at the next signature -------
   assert.equal(written.length, artwork.length, "no mipmap bytes leak into the file");
@@ -226,7 +231,7 @@ async function run() {
     dir: smallOnly,
     preview: previewFile,
   });
-  assert.equal(writes[0][0], "Wallpapers/wallvia-we-9999000002.jpg", "a 320px texture is not worth preferring");
+  assert.equal(writes[0][0], CACHE + "/wallvia-we-9999000002.jpg", "a 320px texture is not worth preferring");
 
   // --- 4. corrupt package: still falls back instead of throwing -----------
   const broken = path.join(tmp, "broken");
@@ -241,7 +246,7 @@ async function run() {
     dir: broken,
     preview: previewFile,
   });
-  assert.equal(writes[0][0], "Wallpapers/wallvia-we-9999000003.jpg", "a corrupt package falls back to the preview");
+  assert.equal(writes[0][0], CACHE + "/wallvia-we-9999000003.jpg", "a corrupt package falls back to the preview");
 
   // --- 5. a truncated table must not be trusted ---------------------------
   const truncated = path.join(tmp, "truncated");
@@ -257,7 +262,7 @@ async function run() {
     dir: truncated,
     preview: previewFile,
   });
-  assert.equal(writes[0][0], "Wallpapers/wallvia-we-9999000004.jpg", "a truncated entry falls back instead of reading garbage");
+  assert.equal(writes[0][0], CACHE + "/wallvia-we-9999000004.jpg", "a truncated entry falls back instead of reading garbage");
 
   // --- 6. no scene.pkg at all (video/web wallpapers) ---------------------
   writes.length = 0;
@@ -269,7 +274,7 @@ async function run() {
     dir: tmp,
     preview: previewFile,
   });
-  assert.equal(writes[0][0], "Wallpapers/wallvia-we-9999000005.jpg", "non-scene wallpapers keep using the preview");
+  assert.equal(writes[0][0], CACHE + "/wallvia-we-9999000005.jpg", "non-scene wallpapers keep using the preview");
 
   // --- 7. against a wallpaper really installed on this machine ------------
   // Skipped when Wallpaper Engine is absent, so the suite stays portable. Some

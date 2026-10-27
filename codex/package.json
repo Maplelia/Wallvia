@@ -1,6 +1,6 @@
 {
   "name": "wallvia",
-  "version": "0.2.7",
+  "version": "1.0.1",
   "description": "Bring your Wallpaper Engine everywhere. Mirrors your Wallpaper Engine background into the OpenAI Codex desktop app via CDP (no file patches, no admin).",
   "type": "module",
   "license": "MIT",

@@ -26,8 +26,8 @@ import {
   Plugin,
   PluginSettingTab,
   Setting,
-  SettingDefinition,
   SettingDefinitionItem,
+  SettingGroupItem,
   TFile,
   normalizePath,
   requireApiVersion,
@@ -50,6 +50,8 @@ import {
   writeVideoFrame,
 } from "./wallpaper-engine";
 import { WallpaperPanel, PanelHost } from "./panel";
+import { VideoServer } from "./video-server";
+import { VideoWallpaperLayer } from "./video-layer";
 import {
   DEFAULTS,
   DESCS,
@@ -126,6 +128,71 @@ export default class WallpaperPlugin extends Plugin {
   private resolved: { path: string; url: string } | null = null;
 
   /**
+   * Set by `onunload()`, checked after every `await` in the async paths.
+   *
+   * Disabling the plugin unregisters its events immediately, but an in-flight
+   * scene decode or video seek keeps running. Without this flag it finished by
+   * re-adding the classes and CSS variables to `document.body`, so the
+   * wallpaper stayed *after* the plugin was disabled — and only a restart could
+   * remove it.
+   */
+  private unloaded = false;
+
+  /**
+   * Bumped by every `apply()`. A slower run started earlier must not paint over
+   * a newer one (two layout events plus a theme change can overlap).
+   */
+  private applySeq = 0;
+
+  /**
+   * The last swallowed failure, shown on the settings page. Everything that is
+   * allowed to fail softly still has to end up somewhere the user can see it:
+   * "nothing happened" was the symptom of the old bare `catch {}`.
+   */
+  lastError: { at: string; message: string; when: number } | null = null;
+
+  /**
+   * The playing video, when the current wallpaper is a video and playback is
+   * enabled. Created on first use; destroyed on unload and when the wallpaper
+   * changes to a still.
+   */
+  private videoLayer = new VideoWallpaperLayer();
+  /**
+   * Loopback server for the video file, which lives outside the vault and so
+   * cannot be served through `app://`.
+   */
+  private videoServer = new VideoServer();
+
+  /** Record a non-fatal failure instead of losing it. */
+  reportError(at: string, e: unknown): void {
+    this.lastError = { at, message: errorMessage(e), when: Date.now() };
+    console.debug(`[wallvia] ${at}: ${errorMessage(e)}`);
+    this.panelInstance?.refresh();
+  }
+
+  /**
+   * Remove the stills 1.0.x left in the vault's `Wallpapers/` folder.
+   *
+   * Only files with our own prefix are touched, and only when the saved cache
+   * setting was still the old default — a user who deliberately kept that
+   * folder visible keeps it.
+   */
+  private async clearLegacyCache(dir: string): Promise<void> {
+    try {
+      const listed = await this.app.vault.adapter.list(dir);
+      for (const file of listed.files) {
+        const name = file.slice(file.lastIndexOf("/") + 1);
+        if (!name.startsWith(WE_CACHE_PREFIX)) continue;
+        await this.app.vault.adapter.remove(file);
+      }
+    } catch {
+      // A folder that does not exist is the normal case on a fresh install, so
+      // this cleanup stays quiet on purpose — there is nothing to report when
+      // there is nothing to clean.
+    }
+  }
+
+  /**
    * The in-app panel (dsh-web-all's floating button + controls). Built on
    * first use.
    */
@@ -143,6 +210,14 @@ export default class WallpaperPlugin extends Plugin {
     this.settings.fit = normalizeFit(this.settings.fit);
     this.settings.glass = migrateGlass(saved);
     delete this.settings.glassEditors;
+    // 1.0.x copied stills into `Wallpapers/` at the vault root, which the file
+    // explorer lists. The default is now the plugin's private cache folder, so
+    // a saved value that is exactly the old default means "never touched" —
+    // migrate it and drop the files it left behind (only our own prefix).
+    if (saved?.weCacheDir === "Wallpapers") {
+      this.settings.weCacheDir = "";
+      void this.clearLegacyCache("Wallpapers");
+    }
 
     this.registerEvent(this.app.workspace.on("css-change", () => this.scheduleApply()));
     this.registerEvent(this.app.workspace.on("layout-change", () => this.scheduleApply()));
@@ -168,7 +243,11 @@ export default class WallpaperPlugin extends Plugin {
       this.app.vault.on("delete", (f: TFile) => {
         if (f.path === this.settings.image) {
           this.settings.image = "";
+          // The poster is gone; the moving layer has nothing to fall back on and
+          // must go too, or it keeps playing behind a blank workspace.
+          this.settings.videoPath = "";
           this.invalidateImage();
+          void this.apply();
           void this.saveSettings();
         }
       })
@@ -182,12 +261,21 @@ export default class WallpaperPlugin extends Plugin {
     });
     this.addCommand({
       id: "toggle-wallpaper",
-      name: "Toggle wallpaper",
+      name: "Toggle wallpaper (master switch)",
       callback: () => {
         this.settings.enabled = !this.settings.enabled;
         void this.apply();
         void this.saveSettings();
         this.panel.refresh();
+        // Without this the command looked like it did nothing: the wallpaper is
+        // behind everything, so "off" and "the command failed" were the same
+        // picture. Naming what was kept matters too — people assume toggling off
+        // throws the choice away.
+        new Notice(
+          this.settings.enabled
+            ? "Wallvia: 壁纸已启用"
+            : "Wallvia: 壁纸已停用(选择的壁纸仍保留)"
+        );
       },
     });
     this.addCommand({
@@ -215,6 +303,9 @@ export default class WallpaperPlugin extends Plugin {
   pickLocalImage(): void {
     new ImagePicker(this.app, (p) => {
       this.settings.image = p;
+      // A still image replaces any playing video: keeping the old `videoPath`
+      // would leave a video behind a picture the user just chose.
+      this.settings.videoPath = "";
       this.settings.enabled = true;
       void this.apply();
       void this.saveSettings();
@@ -261,15 +352,20 @@ export default class WallpaperPlugin extends Plugin {
         this.imageUrl = url;
         return;
       }
-    } catch {
-      // Unreadable or missing: fall through to "no image".
+    } catch (e) {
+      // Unreadable or missing: fall through to "no image", but say why — a
+      // silently empty wallpaper is indistinguishable from a broken setting.
+      this.reportError("读取壁纸文件", e);
     }
     this.resolved = null;
     this.imageUrl = "";
   }
 
   async apply() {
+    const seq = ++this.applySeq;
     await this.resolveImage();
+    // Disabled while we were waiting, or a newer apply() has taken over.
+    if (this.unloaded || seq !== this.applySeq) return;
     const body = document.body;
     const active = this.settings.enabled && !!this.imageUrl;
     body.classList.toggle("wallvia-enabled", active);
@@ -277,17 +373,87 @@ export default class WallpaperPlugin extends Plugin {
     // surfaces stay opaque, so the class is only applied above 0.
     body.classList.toggle("wallvia-glass", active && this.settings.glass > 0);
     const st = body.style;
-    setCss(st, "--wallvia-image", this.imageUrl ? `url("${this.imageUrl}")` : "none");
-    setCss(st, "--wallvia-opacity", String(this.settings.opacity));
-    setCss(st, "--wallvia-dim", String(this.settings.dim));
-    setCss(st, "--wallvia-blur", this.settings.blur + "px");
-    setCss(st, "--wallvia-glass", glassFill(this.settings.glass));
-    setCss(st, "--wallvia-embed-opacity", embedOpacity(this.settings.embed));
-    setCss(st, "--wallvia-fit", FIT_CSS[this.settings.fit]);
+    // `active`, not `imageUrl`: with the master switch off the picture must stop
+    // being referenced at all. Writing the url anyway left `--wallvia-image`
+    // populated while disabled, so anything reading the variable (a theme, a
+    // snippet, a future selector not keyed on the class) still painted it — the
+    // switch looked like it did nothing for those cases.
+    setCss(st, "--wallvia-image", active ? `url("${this.imageUrl}")` : "none");
+    // Every variable is gated on `active`, not just the image: leaving them set
+    // while disabled meant the page kept carrying a full wallpaper configuration
+    // (opacity, wash colour, glass level) with nothing painted — invisible until
+    // some other stylesheet read one of them.
+    setCss(st, "--wallvia-opacity", active ? String(this.settings.opacity) : "");
+    setCss(st, "--wallvia-dim", active ? String(this.settings.dim) : "");
+    setCss(st, "--wallvia-blur", active ? this.settings.blur + "px" : "");
+    setCss(st, "--wallvia-glass", active ? glassFill(this.settings.glass) : "");
+    setCss(st, "--wallvia-embed-opacity", active ? embedOpacity(this.settings.embed) : "");
+    setCss(st, "--wallvia-fit", active ? FIT_CSS[this.settings.fit] : "");
     // The wash follows the theme unless the user pinned it; `theme-light` is
     // Obsidian's own class, so a theme switch only needs the css-change event
     // that already calls apply().
-    setCss(st, "--wallvia-wash", washRgb(this.settings, body.classList.contains("theme-light")));
+    setCss(
+      st,
+      "--wallvia-wash",
+      active ? washRgb(this.settings, body.classList.contains("theme-light")) : ""
+    );
+    // The moving layer, last: it reads `enabled`/`fit`/`opacity` from the same
+    // settings the still image just wrote, and its own failure path must not
+    // stop the still from painting.
+    await this.syncVideoLayer(seq);
+  }
+
+  /**
+   * Put the video layer in sync with the current wallpaper, or take it down.
+   *
+   * Runs after the still has been painted, so a video that fails to start
+   * leaves the still (or its decoded frame) on screen instead of a hole. Every
+   * exit re-checks `unloaded`/`applySeq`: a slow `stat()` or a stalled loopback
+   * request must not add a `<video>` to a plugin that is being torn down.
+   */
+  private async syncVideoLayer(seq: number): Promise<void> {
+    // The still is the poster, so a video with no still is not a wallpaper we can
+    // present: the first frame would be a black screen. Requiring both is also
+    // what makes "清除图片" take the video down even if a caller forgets
+    // `videoPath`.
+    const wantsVideo =
+      this.settings.enabled &&
+      this.settings.videoWallpaper &&
+      !!this.settings.videoPath &&
+      !!this.imageUrl;
+    if (!wantsVideo) {
+      this.videoLayer.destroy();
+      this.videoServer.stop();
+      return;
+    }
+    let result: { url: string } | { reason: "no-node" | "missing" | "no-socket" } | null = null;
+    try {
+      result = await this.videoServer.set(this.settings.videoPath);
+    } catch (e) {
+      this.reportError("启动视频服务", e);
+    }
+    if (this.unloaded || seq !== this.applySeq) return;
+    if (!result || !("url" in result)) {
+      // No loopback server means no video. The still and the decoded frame stay
+      // up, and the settings page says *which* of the three causes it was.
+      this.videoLayer.destroy();
+      const reason = result && "reason" in result ? result.reason : "no-socket";
+      this.reportError("播放视频壁纸", new Error(VIDEO_FAILURE[reason]));
+      return;
+    }
+    const url = result.url;
+    this.videoLayer.sync(
+      {
+        path: this.settings.videoPath,
+        url,
+        poster: this.imageUrl,
+        fit: FIT_CSS[this.settings.fit],
+        opacity: this.settings.opacity,
+        muted: this.settings.videoMuted,
+        pauseUnfocused: this.settings.videoPauseUnfocused,
+      },
+      (at, e) => this.reportError(at, e)
+    );
   }
 
   // -------------------------------------------------- Wallpaper Engine
@@ -343,13 +509,14 @@ export default class WallpaperPlugin extends Plugin {
    * JPEG. Anything unexpected falls back to the preview.
    */
   async applyWeWallpaper(wallpaper: WeWallpaper): Promise<void> {
-    const dir = normalizeCacheDir(this.settings.weCacheDir);
+    const dir = cacheDirFor(this.app, this.settings.weCacheDir);
     // Ids are workshop numbers or project folder names; keep them filename-safe.
     const id = wallpaper.id.replace(/[^A-Za-z0-9._-]/g, "_");
     const hiRes =
       this.settings.hires && wallpaper.type === "scene"
         ? await readSceneHiResImage(wallpaper.dir, this.settings.maxImageWidth)
         : null;
+    if (this.unloaded) return;
     // A video has no still of its own, so the frame the picker shows is what
     // gets applied. Without this the wallpaper fell back to Wallpaper Engine's
     // square preview, which a 16:9 window upscales ~3x — the "帧截取没生效" case.
@@ -357,7 +524,9 @@ export default class WallpaperPlugin extends Plugin {
       !hiRes && this.settings.videoFrames && wallpaper.type === "video"
         ? await this.videoStill(wallpaper)
         : null;
+    if (this.unloaded) return;
     const bytes = hiRes?.bytes ?? frame?.bytes ?? (await readImageArrayBuffer(wallpaper.preview));
+    if (this.unloaded) return;
     const ext = hiRes?.ext ?? frame?.ext ?? (fileExtension(wallpaper.preview) || "jpg");
     const target = normalizePath(`${dir}/${WE_CACHE_PREFIX}${id}.${ext}`);
     if (!bytes) {
@@ -368,11 +537,20 @@ export default class WallpaperPlugin extends Plugin {
       await ensureVaultDir(this.app, dir);
       await this.app.vault.adapter.writeBinary(target, bytes);
     } catch (e) {
-      new Notice("复制壁纸到 vault 失败:" + errorMessage(e));
+      new Notice("复制壁纸到缓存目录失败:" + errorMessage(e));
+      this.reportError("写入壁纸缓存", e);
       return;
     }
-    await pruneWeCache(this.app, dir, target);
+    if (this.unloaded) return;
+    await pruneWeCache(this.app, dir, target, (e) => this.reportError("清理旧缓存", e));
     this.settings.image = target;
+    // A video wallpaper also gets a moving layer; the still above becomes its
+    // poster. Stored as an absolute native path because the file lives in the
+    // Wallpaper Engine library, outside the vault.
+    this.settings.videoPath =
+      this.settings.videoWallpaper && wallpaper.type === "video"
+        ? videoFileOf(wallpaper) ?? ""
+        : "";
     // Picking a wallpaper means wanting to see it. Without this, choosing one
     // while the wallpaper is toggled off wrote the file and quietly changed
     // nothing — the "选中后没反应" case.
@@ -380,12 +558,15 @@ export default class WallpaperPlugin extends Plugin {
     await this.apply();
     await this.saveSettings();
     this.panel.refresh();
+    const moving = this.settings.videoPath && this.videoLayer.active;
     new Notice(
       hiRes
         ? `壁纸已应用:${wallpaper.title}(${hiRes.width}×${hiRes.height} 原始画面)`
-        : frame
-          ? `壁纸已应用:${wallpaper.title}(${frame.width}×${frame.height} 视频帧)`
-          : "壁纸已应用:" + wallpaper.title
+        : moving
+          ? `壁纸已应用:${wallpaper.title}(视频播放中,抽帧作封面)`
+          : frame
+            ? `壁纸已应用:${wallpaper.title}(${frame.width}×${frame.height} 视频帧)`
+            : "壁纸已应用:" + wallpaper.title
     );
   }
 
@@ -413,10 +594,20 @@ export default class WallpaperPlugin extends Plugin {
   }
 
   onunload() {
+    // First, before anything else: every in-flight async path re-checks this
+    // after its next `await` and bails out instead of repainting a plugin that
+    // is being torn down.
+    this.unloaded = true;
+    this.applySeq++;
     if (this.applyTimer !== null) {
       window.clearTimeout(this.applyTimer);
       this.applyTimer = null;
     }
+    // A playing video holds a decoder and a file handle, and the loopback
+    // server holds a listening socket: disabling the plugin has to release all
+    // three, or the wallpaper keeps playing after the plugin is off.
+    this.videoLayer.destroy();
+    this.videoServer.stop();
     this.panelInstance?.destroy();
     document.body.classList.remove("wallvia-enabled");
     document.body.classList.remove("wallvia-glass");
@@ -477,6 +668,13 @@ function setCss(st: CSSStyleDeclaration, k: string, v: string) {
   else st.removeProperty(k);
 }
 
+/** Why a video wallpaper could not be played, in the user's terms. */
+const VIDEO_FAILURE: Record<"no-node" | "missing" | "no-socket", string> = {
+  "no-node": "这台设备没有可用的本地文件接口(仅桌面端支持视频壁纸)",
+  missing: "视频文件不在了(被移动或删除),请重新选择壁纸",
+  "no-socket": "无法启动本地播放服务(端口被占用),视频未播放",
+};
+
 // ------------------------------------------------- Wallpaper Engine helpers
 
 interface WeChoice {
@@ -493,10 +691,28 @@ interface RecursiveMkdirAdapter {
   mkdir(path: string, recursive?: boolean): Promise<void>;
 }
 
-/** Vault-relative folder for copied previews; never empty, never rooted. */
+/** Vault-relative folder for copied stills; `""` means "the private cache". */
 function normalizeCacheDir(value: string): string {
-  const cleaned = value.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "").trim();
-  return cleaned || DEFAULTS.weCacheDir;
+  return value.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "").trim();
+}
+
+/** The plugin's own id, so the private cache path matches the loaded folder. */
+const PLUGIN_ID = "wallvia";
+
+/**
+ * Where copied stills live.
+ *
+ * Obsidian can only paint files it can serve, so the bytes do have to live
+ * inside the vault — but not in the user's note tree. An empty `weCacheDir`
+ * (the default) resolves to `<configDir>/plugins/wallvia/cache/`: a dot-folder
+ * the file explorer never lists, so applying a wallpaper no longer drops a
+ * `Wallpapers/` folder full of PNGs next to someone's notes. A non-empty value
+ * is honoured as-is: that is the user explicitly asking for a visible folder.
+ */
+function cacheDirFor(app: App, preferred: string): string {
+  const custom = normalizeCacheDir(preferred);
+  if (custom) return custom;
+  return normalizePath(`${app.vault.configDir}/plugins/${PLUGIN_ID}/cache`);
 }
 
 /** Comparison key for a native directory path. */
@@ -534,8 +750,19 @@ async function ensureVaultDir(app: App, dir: string): Promise<void> {
   }
 }
 
-/** Delete previously copied previews so the cache folder holds only one file. */
-async function pruneWeCache(app: App, dir: string, keep: string): Promise<void> {
+/**
+ * Delete previously copied stills so the cache folder holds only one file.
+ *
+ * `onError` is how a failure here becomes visible: the cleanup is best-effort,
+ * but "the folder keeps growing and nobody says why" is exactly the kind of
+ * silent failure the settings page's status line exists for.
+ */
+async function pruneWeCache(
+  app: App,
+  dir: string,
+  keep: string,
+  onError?: (e: unknown) => void
+): Promise<void> {
   try {
     const listed = await app.vault.adapter.list(dir);
     for (const file of listed.files) {
@@ -544,12 +771,15 @@ async function pruneWeCache(app: App, dir: string, keep: string): Promise<void> 
       if (!name.startsWith(WE_CACHE_PREFIX)) continue;
       try {
         await app.vault.adapter.remove(file);
-      } catch {
-        // Locked or already gone — not worth interrupting the user.
+      } catch (e) {
+        // Locked or already gone — not worth interrupting the user, but worth
+        // recording: a file the adapter refuses to delete is a real anomaly.
+        onError?.(e);
       }
     }
-  } catch {
+  } catch (e) {
     // Unreadable cache folder: keep the new file, skip the cleanup.
+    onError?.(e);
   }
 }
 
@@ -681,6 +911,12 @@ class WeWallpaperGridModal extends Modal {
       attr: { alt: w.title },
     });
     if (choice.current) shot.createDiv({ cls: "wallvia-we-current", text: WE_CARD_CURRENT });
+    // A play glyph on the preview, not just "视频" in the meta line: the meta is
+    // small grey text, and "this one moves" is the single fact a user needs
+    // before applying. Same corner as the "current" badge, opposite side.
+    if (w.type === "video") {
+      shot.createDiv({ cls: "wallvia-we-play", text: "▶", attr: { "aria-label": "视频壁纸" } });
+    }
     // The artwork's own resolution, so a wallpaper that would render soft is
     // obvious before it is applied. Sits over the preview's bottom-left corner.
     const res = shot.createDiv({ cls: "wallvia-we-px" });
@@ -1069,7 +1305,13 @@ function previewMime(path: string): string {
  * that used to call `commit()`. The rest only persist — a slider must not
  * re-render mid-drag.
  */
-const REBUILD_KEYS: ReadonlySet<string> = new Set(["enabled", "fit", "hires", "videoFrames"]);
+const REBUILD_KEYS: ReadonlySet<string> = new Set([
+  "enabled",
+  "fit",
+  "hires",
+  "videoFrames",
+  "videoWallpaper",
+]);
 
 /** `[{value,label}]` → the plain map the declarative dropdown wants. */
 function dropdownOptions(
@@ -1144,108 +1386,118 @@ class WallpaperSettingTab extends PluginSettingTab {
    * the async status line) use the `render` escape hatch, because
    * `SettingDefinitionControl` binds exactly one `control` per row.
    */
-  getSettingDefinitions(): SettingDefinitionItem[] {
+  /**
+   * The page, described once.
+   *
+   * `getSettingDefinitions()` maps this onto the 1.13+ declarative API and
+   * `display()` builds `Setting` rows from it on older builds. Two hand-written
+   * copies of the same 20 rows is how a setting ends up in one page and not the
+   * other; the copies this replaces had already drifted apart in labels,
+   * sections and change callbacks.
+   */
+  private rows(): SettingsRow[] {
     const s = this.plugin.settings;
-    const items: SettingDefinitionItem[] = [
+    const rows: SettingsRow[] = [
+      controlRow(LABELS.enable, DESCS.enable, "enabled", { type: "toggle" }),
+      this.imageRow(),
+      controlRow(LABELS.fit, DESCS.fit, "fit", { type: "dropdown", options: FIT_OPTIONS }),
+      controlRow(LABELS.dim, DESCS.dim, "dim", { type: "slider", min: 0, max: 1, step: 0.05 }),
+      controlRow(LABELS.glass, DESCS.glass, "glass", { type: "slider", min: 0, max: 100, step: 1 }),
+      controlRow(LABELS.embed, DESCS.embed, "embed", { type: "slider", min: 0, max: 100, step: 1 }),
+      controlRow(LABELS.blur, DESCS.blur, "blur", { type: "slider", min: 0, max: 40, step: 1 }),
+      controlRow(LABELS.opacity, DESCS.opacity, "opacity", { type: "slider", min: 0, max: 1, step: 0.05 }),
+      this.washRow(),
       {
-        name: LABELS.enable,
-        desc: DESCS.enable,
-        control: { key: "enabled", type: "toggle" },
-      },
-      this.imageDefinition(),
-      {
-        name: LABELS.fit,
-        desc: DESCS.fit,
-        control: {
-          key: "fit",
-          type: "dropdown",
-          options: dropdownOptions(FIT_OPTIONS),
-        },
-      },
-      this.sliderDefinition(LABELS.dim, DESCS.dim, "dim", 0, 1, 0.05),
-      this.sliderDefinition(LABELS.glass, DESCS.glass, "glass", 0, 100, 1),
-      this.sliderDefinition(LABELS.embed, DESCS.embed, "embed", 0, 100, 1),
-      this.sliderDefinition(LABELS.blur, DESCS.blur, "blur", 0, 40, 1),
-      this.sliderDefinition(LABELS.opacity, DESCS.opacity, "opacity", 0, 1, 0.05),
-      this.washDefinition(),
-      {
+        kind: "action",
         name: "恢复默认效果",
         desc: "把上面的效果项恢复为默认值;当前壁纸、缓存目录和可选行为不会改变。",
-        action: () => {
+        label: "恢复默认",
+        run: () => {
           resetEffects(s);
           void this.commit();
         },
       },
     ];
+    // Only when there is something to say: a permanent empty row would train
+    // the user to ignore the one time it matters.
+    if (this.plugin.lastError) rows.push(this.lastErrorRow());
 
-    // Node APIs are unavailable on mobile, so the whole section is absent
-    // there instead of offering a button that can never work. Two sibling
-    // top-level groups, because `SettingDefinitionGroup.items` only accepts
-    // settings and pages — groups cannot nest.
+    // Node APIs are unavailable on mobile, so the whole section is absent there
+    // instead of offering a button that can never work. Two sibling top-level
+    // groups, because `SettingDefinitionGroup.items` only accepts settings and
+    // pages — groups cannot nest.
     if (this.plugin.weAvailable()) {
-      items.push({
-        type: "group",
+      rows.push({
+        kind: "group",
         heading: WE_NAME,
-        items: [
-          this.wePickerDefinition(),
-          {
-            name: "缓存目录",
-            desc: "复制过来的壁纸预览存放的 vault 目录。",
-            control: {
-              key: "weCacheDir",
-              type: "text",
-              placeholder: DEFAULTS.weCacheDir,
-            },
-          },
+        rows: [this.wePickerRow(), this.cacheDirRow()],
+      });
+      // Video playback is not an "optional behaviour" like the two extraction
+      // switches: it changes what the wallpaper *is* (a moving picture instead of
+      // a still), and its two sub-switches only mean anything when it is on. Its
+      // own group makes that hierarchy visible instead of flattening six toggles
+      // into one list.
+      rows.push({
+        kind: "group",
+        heading: "视频壁纸",
+        rows: [
+          controlRow(LABELS.videoWallpaper, DESCS.videoWallpaper, "videoWallpaper", { type: "toggle" }),
+          this.videoSubRow("videoMuted", LABELS.videoMuted, DESCS.videoMuted),
+          this.videoSubRow("videoPauseUnfocused", LABELS.videoPauseUnfocused, DESCS.videoPauseUnfocused),
         ],
       });
-      items.push({
-        type: "group",
+      rows.push({
+        kind: "group",
         heading: "可选行为",
-        items: [
-          {
-            name: LABELS.hires,
-            desc: DESCS.hires,
-            control: { key: "hires", type: "toggle" },
-          },
-          {
-            name: LABELS.videoFrames,
-            desc: DESCS.videoFrames,
-            control: { key: "videoFrames", type: "toggle" },
-          },
-          this.sliderDefinition(
-            LABELS.maxImageWidth,
-            DESCS.maxImageWidth,
-            "maxImageWidth",
-            MAX_IMAGE_WIDTH.min,
-            MAX_IMAGE_WIDTH.max,
-            MAX_IMAGE_WIDTH.step
-          ),
+        rows: [
+          controlRow(LABELS.hires, DESCS.hires, "hires", { type: "toggle" }),
+          controlRow(LABELS.videoFrames, DESCS.videoFrames, "videoFrames", { type: "toggle" }),
+          controlRow(LABELS.maxImageWidth, DESCS.maxImageWidth, "maxImageWidth", {
+            type: "slider",
+            min: MAX_IMAGE_WIDTH.min,
+            max: MAX_IMAGE_WIDTH.max,
+            step: MAX_IMAGE_WIDTH.step,
+          }),
         ],
       });
     }
-
-    return items;
-  }
-
-  private sliderDefinition(
-    name: string,
-    desc: string,
-    key: string,
-    min: number,
-    max: number,
-    step: number
-  ): SettingDefinition {
-    return { name, desc, control: { key, type: "slider", min, max, step } };
+    return rows;
   }
 
   /**
-   * The image row: two buttons in one row plus the preview below it, so it
-   * cannot be a single declarative `control`.
+   * One of the two switches that only apply while video playback is on.
+   *
+   * Disabled rather than hidden: a row that disappears when you flip the switch
+   * above it makes the page jump and looks like a bug. A greyed row plus a desc
+   * that says why is the honest version.
    */
-  private imageDefinition(): SettingDefinition {
+  private videoSubRow(key: string, name: string, desc: string): ControlRow {
+    const on = this.plugin.settings.videoWallpaper;
+    const isVideo = !!this.plugin.settings.videoPath;
+    const suffix = !on
+      ? "(先打开上面的「视频壁纸播放」)"
+      : !isVideo
+        ? "(当前壁纸不是视频,选了视频壁纸后生效)"
+        : "";
+    return {
+      kind: "control",
+      name,
+      desc: desc + suffix,
+      key,
+      control: { type: "toggle" },
+      disabled: !on,
+    };
+  }
+
+  getSettingDefinitions(): SettingDefinitionItem[] {
+    return this.rows().map(rowToDefinition);
+  }
+
+  /** The image row: two buttons, plus the preview element under them. */
+  private imageRow(): RenderRow {
     const s = this.plugin.settings;
     return {
+      kind: "render",
       name: LABELS.image,
       desc: DESCS.image,
       render: (setting) => {
@@ -1253,6 +1505,9 @@ class WallpaperSettingTab extends PluginSettingTab {
           b.setButtonText("选择图片…").onClick(() => {
             new ImagePicker(this.app, (p) => {
               s.image = p;
+              // A still image replaces any playing video; keeping the old
+              // `videoPath` would leave a video behind the picture just chosen.
+              s.videoPath = "";
               s.enabled = true;
               void this.commit();
             }).open();
@@ -1261,21 +1516,25 @@ class WallpaperSettingTab extends PluginSettingTab {
         setting.addButton((b) =>
           b.setButtonText("清除").onClick(() => {
             s.image = "";
+            // Both halves: the still *and* the moving layer. Clearing only the
+            // still left the `<video>` playing with no wallpaper class — the
+            // plugin looked disabled while the video kept running.
+            s.videoPath = "";
             void this.commit();
           })
         );
-        // The preview is not a declarative control: it is a custom element
-        // whose URL can fail to resolve. It belongs under the row, in the same
-        // list the row itself was appended to.
+        // The preview is not a control: it is a custom element whose URL can
+        // fail to resolve. It belongs under the row, in the same list.
         this.appendPreview(setting.settingEl.parentElement ?? this.containerEl);
       },
     };
   }
 
   /** The wash row: a dropdown *and* a colour picker, one gesture each. */
-  private washDefinition(): SettingDefinition {
+  private washRow(): RenderRow {
     const s = this.plugin.settings;
     return {
+      kind: "render",
       name: LABELS.wash,
       desc: DESCS.wash,
       render: (setting) => {
@@ -1300,8 +1559,9 @@ class WallpaperSettingTab extends PluginSettingTab {
   }
 
   /** The Wallpaper Engine picker button plus the async status line under it. */
-  private wePickerDefinition(): SettingDefinition {
+  private wePickerRow(): RenderRow {
     return {
+      kind: "render",
       name: "选择已下载的壁纸",
       desc: WE_PICK_DESC,
       render: (setting) => {
@@ -1318,6 +1578,39 @@ class WallpaperSettingTab extends PluginSettingTab {
     };
   }
 
+  private cacheDirRow(): ControlRow {
+    return controlRow(
+      "缓存目录",
+      "复制过来的壁纸画面存放的 vault 目录。留空则用插件私有缓存目录,不会出现在文件列表里。",
+      "weCacheDir",
+      { type: "text", placeholder: "留空 = 插件私有缓存" }
+    );
+  }
+
+  /**
+   * The last non-fatal failure, as a row the user can actually read.
+   *
+   * This is the other half of replacing the bare `catch {}` blocks: recording
+   * the error without showing it would still be a silent failure.
+   */
+  private lastErrorRow(): RenderRow {
+    const failure = this.plugin.lastError;
+    const when = failure ? new Date(failure.when).toLocaleTimeString() : "";
+    return {
+      kind: "render",
+      name: "上次失败",
+      desc: failure ? `${failure.at}:${failure.message}(${when})` : "",
+      render: (setting) => {
+        setting.settingEl.addClass("wallvia-error-row");
+        setting.addButton((b) =>
+          b.setButtonText("忽略").onClick(() => {
+            this.plugin.lastError = null;
+            this.refresh();
+          })
+        );
+      },
+    };
+  }
   /**
    * The preview under the image row. Resolution is defensive on purpose: the
    * effect controls *below* the preview are what the preview is for, so a
@@ -1332,6 +1625,15 @@ class WallpaperSettingTab extends PluginSettingTab {
       // No inline background-size: styles.css pins the preview to `contain` so
       // the whole image is visible whatever the wallpaper's own fit is.
       el.style.opacity = String(s.opacity);
+      // Say what the preview is, not just what it looks like: the same still is
+      // either a wallpaper or the poster of a moving one, and there was no way
+      // to tell which from this page.
+      if (s.videoPath) {
+        host.createDiv({
+          cls: "wallvia-preview-note",
+          text: s.videoWallpaper ? "视频壁纸 · 播放中(上图是封面)" : "视频壁纸 · 已关闭播放(只显示封面)",
+        });
+      }
     } else if (s.image) {
       host.createDiv({
         cls: "wallvia-preview wallvia-preview-missing",
@@ -1363,228 +1665,75 @@ class WallpaperSettingTab extends PluginSettingTab {
 
   // --------------------------------- imperative fallback (Obsidian < 1.13)
 
+  /**
+   * The same page for builds before 1.13: walk the shared row list and build
+   * `Setting` rows from it.
+   *
+   * Values and side effects go through the same `getControlValue` /
+   * `setControlValue` pair the declarative path uses, so the two renderers
+   * cannot disagree about what a control reads, what it writes, or which
+   * changes re-render the page.
+   */
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    const s = this.plugin.settings;
+    this.renderLegacy(containerEl, this.rows());
+  }
 
-    new Setting(containerEl)
-      .setName(LABELS.enable)
-      .setDesc(DESCS.enable)
-      .addToggle((t) =>
-        t.setValue(s.enabled).onChange((v) => {
-          s.enabled = v;
-          void this.commit();
-        })
-      );
-
-    new Setting(containerEl)
-      .setName(LABELS.image)
-      .setDesc(DESCS.image)
-      .addButton((b) =>
-        b.setButtonText("选择图片…").onClick(() => {
-          new ImagePicker(this.app, (p) => {
-            s.image = p;
-            s.enabled = true;
-            void this.commit();
-          }).open();
-        })
-      )
-      .addButton((b) =>
-        b.setButtonText("清除").onClick(() => {
-          s.image = "";
-          void this.commit();
-        })
-      );
-
-    this.appendPreview(containerEl);
-
-    new Setting(containerEl)
-      .setName(LABELS.fit)
-      .setDesc(DESCS.fit)
-      .addDropdown((d) => {
-        for (const option of FIT_OPTIONS) d.addOption(option.value, option.label);
-        return d.setValue(s.fit).onChange((v) => {
-          s.fit = normalizeFit(v);
-          void this.commit();
+  private renderLegacy(host: HTMLElement, rows: SettingsRow[]): void {
+    for (const row of rows) {
+      if (row.kind === "group") {
+        new Setting(host).setName(row.heading).setHeading();
+        this.renderLegacy(host, row.rows);
+        continue;
+      }
+      if (row.kind === "render") {
+        // The declarative host renders name/desc from the definition; the
+        // imperative row has to carry them itself or the row is untitled.
+        row.render(new Setting(host).setName(row.name).setDesc(row.desc));
+        continue;
+      }
+      if (row.kind === "action") {
+        new Setting(host)
+          .setName(row.name)
+          .setDesc(row.desc)
+          .addButton((b) => b.setButtonText(row.label).onClick(row.run));
+        continue;
+      }
+      const setting = new Setting(host).setName(row.name).setDesc(row.desc);
+      // `disabled` is only expressible here: the declarative API (1.13+) has no
+      // per-item flag, so its rows carry the same fact in `desc` instead.
+      if (row.disabled) setting.setDisabled(true);
+      const key = row.key;
+      const write = (value: unknown): void => {
+        void this.setControlValue(key, value);
+      };
+      const control = row.control;
+      if (control.type === "slider") {
+        setting.addSlider((sl) =>
+          sl
+            .setLimits(control.min, control.max, control.step)
+            .setValue(Number(this.getControlValue(key)))
+            .onChange(write)
+        );
+      } else if (control.type === "dropdown") {
+        setting.addDropdown((d) => {
+          for (const option of control.options) d.addOption(option.value, option.label);
+          return d.setValue(String(this.getControlValue(key))).onChange(write);
         });
-      });
-
-    new Setting(containerEl)
-      .setName(LABELS.dim)
-      .setDesc(DESCS.dim)
-      .addSlider((sl) =>
-        sl
-          .setLimits(0, 1, 0.05)
-          .setValue(s.dim)
-          .onChange((v) => {
-            s.dim = v;
-            void this.persist();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName(LABELS.glass)
-      .setDesc(DESCS.glass)
-      .addSlider((sl) =>
-        sl
-          .setLimits(0, 100, 1)
-          .setValue(s.glass)
-          .onChange((v) => {
-            s.glass = v;
-            void this.persist();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName(LABELS.embed)
-      .setDesc(DESCS.embed)
-      .addSlider((sl) =>
-        sl
-          .setLimits(0, 100, 1)
-          .setValue(s.embed)
-          .onChange((v) => {
-            s.embed = v;
-            void this.persist();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName(LABELS.blur)
-      .setDesc(DESCS.blur)
-      .addSlider((sl) =>
-        sl
-          .setLimits(0, 40, 1)
-          .setValue(s.blur)
-          .onChange((v) => {
-            s.blur = v;
-            void this.persist();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName(LABELS.opacity)
-      .setDesc(DESCS.opacity)
-      .addSlider((sl) =>
-        sl
-          .setLimits(0, 1, 0.05)
-          .setValue(s.opacity)
-          .onChange((v) => {
-            s.opacity = v;
-            void this.persist();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName(LABELS.wash)
-      .setDesc(DESCS.wash)
-      .addDropdown((d) => {
-        for (const option of WASH_OPTIONS) d.addOption(option.value, option.label);
-        return d.setValue(s.wash).onChange((v) => {
-          s.wash = v as WPWash;
-          void this.commit();
+      } else if (control.type === "text") {
+        setting.addText((t) => {
+          if (control.placeholder) t.setPlaceholder(control.placeholder);
+          const current = this.getControlValue(key);
+          return t.setValue(typeof current === "string" ? current : "").onChange(write);
         });
-      })
-      .addColorPicker((p) =>
-        p.setValue(s.washColor).onChange((v) => {
-          s.washColor = v;
-          s.wash = "custom";
-          void this.commit();
-        })
-      );
-
-    new Setting(containerEl)
-      .setName("恢复默认效果")
-      .setDesc("把上面的效果项恢复为默认值;当前壁纸、缓存目录和可选行为不会改变。")
-      .addButton((b) =>
-        b.setButtonText("恢复默认").onClick(() => {
-          resetEffects(s);
-          void this.commit();
-        })
-      );
-
-    // Node APIs are unavailable on mobile, so the whole section is hidden
-    // there instead of offering a button that can never work.
-    if (this.plugin.weAvailable()) this.displayWallpaperEngine(containerEl, s);
+      } else {
+        setting.addToggle((t) =>
+          t.setValue(Boolean(this.getControlValue(key))).onChange(write)
+        );
+      }
+    }
   }
-
-  /**
-   * The three behaviour switches the VS Code port also exposes.
-   *
-   * `liveApply` is deliberately absent: Obsidian writes its values straight into
-   * CSS variables, so a change is already live. `themeAware` is the existing
-   * `wash` model above, which has two extra modes over the VS Code one.
-   */
-  private displayBehaviour(containerEl: HTMLElement, s: WPSettings): void {
-    new Setting(containerEl).setName("可选行为").setHeading();
-
-    new Setting(containerEl)
-      .setName(LABELS.hires)
-      .setDesc(DESCS.hires)
-      .addToggle((t) =>
-        t.setValue(s.hires).onChange((v) => {
-          s.hires = v;
-          void this.commit();
-        })
-      );
-
-    new Setting(containerEl)
-      .setName(LABELS.videoFrames)
-      .setDesc(DESCS.videoFrames)
-      .addToggle((t) =>
-        t.setValue(s.videoFrames).onChange((v) => {
-          s.videoFrames = v;
-          void this.commit();
-        })
-      );
-
-    new Setting(containerEl)
-      .setName(LABELS.maxImageWidth)
-      .setDesc(DESCS.maxImageWidth)
-      .addSlider((sl) =>
-        sl
-          .setLimits(MAX_IMAGE_WIDTH.min, MAX_IMAGE_WIDTH.max, MAX_IMAGE_WIDTH.step)
-          .setValue(s.maxImageWidth)
-          .onChange((v) => {
-            s.maxImageWidth = v;
-            void this.persist();
-          })
-      );
-  }
-
-  /** "Wallpaper Engine" section: picker button, status line, cache folder. */
-  private displayWallpaperEngine(containerEl: HTMLElement, s: WPSettings): void {
-    new Setting(containerEl).setName(WE_NAME).setHeading();
-
-    this.displayBehaviour(containerEl, s);
-
-    new Setting(containerEl)
-      .setName("选择已下载的壁纸")
-      .setDesc(WE_PICK_DESC)
-      .addButton((b) =>
-        b.setButtonText(WE_PICK_BUTTON).onClick(() => {
-          void this.plugin.pickWallpaperEngine();
-        })
-      );
-
-    const statusEl = containerEl.createDiv({ cls: "wallvia-we-status" });
-    statusEl.setText("正在检测已下载的壁纸…");
-    void this.showWeStatus(statusEl);
-
-    new Setting(containerEl)
-      .setName("缓存目录")
-      .setDesc("复制过来的壁纸预览存放的 vault 目录。")
-      .addText((t) =>
-        t
-          .setPlaceholder(DEFAULTS.weCacheDir)
-          .setValue(s.weCacheDir)
-          .onChange((v) => {
-            s.weCacheDir = v;
-            void this.persist();
-          })
-      );
-  }
-
   /** Detect on demand — the count changes while Obsidian stays open. */
   private async showWeStatus(statusEl: HTMLElement): Promise<void> {
     const list = await listWeWallpapers();
@@ -1593,10 +1742,113 @@ class WallpaperSettingTab extends PluginSettingTab {
       return;
     }
     const videos = list.filter((w) => w.type === "video").length;
+    // "首帧由 Obsidian 自己解码" described the old still-only behaviour. Videos
+    // play now, so the line says what actually happens; the frame is only the
+    // poster.
     statusEl.setText(
       videos
-        ? `已找到 ${list.length} 张已下载壁纸(其中 ${videos} 张视频壁纸,首帧由 Obsidian 自己解码)`
+        ? this.plugin.settings.videoWallpaper
+          ? `已找到 ${list.length} 张已下载壁纸(其中 ${videos} 张视频壁纸,会直接播放;抽帧只作封面)`
+          : `已找到 ${list.length} 张已下载壁纸(其中 ${videos} 张视频壁纸,已关闭播放,只取一帧)`
         : `已找到 ${list.length} 张已下载壁纸`
     );
   }
+}
+// ------------------------------------------------------------- settings rows
+
+/** One control slot in a row: the shape both renderers agree on. */
+type SettingsControl =
+  | { type: "toggle" }
+  | { type: "slider"; min: number; max: number; step: number }
+  | { type: "dropdown"; options: ReadonlyArray<{ value: string; label: string }> }
+  | { type: "text"; placeholder?: string };
+
+interface ControlRow {
+  kind: "control";
+  name: string;
+  desc: string;
+  key: string;
+  control: SettingsControl;
+  /**
+   * Only honoured by the legacy `Setting` renderer (the declarative API has no
+   * per-item disabled flag). The desc carries the same information for 1.13+,
+   * so neither surface silently offers a switch that does nothing.
+   */
+  disabled?: boolean;
+}
+interface RenderRow {
+  kind: "render";
+  name: string;
+  desc: string;
+  render: (setting: Setting) => void;
+}
+interface ActionRow {
+  kind: "action";
+  name: string;
+  desc: string;
+  label: string;
+  run: () => void;
+}
+interface GroupRow {
+  kind: "group";
+  heading: string;
+  rows: SettingsRow[];
+}
+type SettingsRow = ControlRow | RenderRow | ActionRow | GroupRow;
+
+function controlRow(
+  name: string,
+  desc: string,
+  key: string,
+  control: SettingsControl
+): ControlRow {
+  return { kind: "control", name, desc, key, control };
+}
+
+/** One row of the shared description as a 1.13+ declarative item. */
+function rowToDefinition(row: SettingsRow): SettingDefinitionItem<string> {
+  if (row.kind === "group") {
+    // `SettingDefinitionGroup.items` only accepts settings and pages — groups
+    // cannot nest, and this table is one level deep by construction.
+    const items: SettingGroupItem<string>[] = [];
+    for (const child of row.rows) {
+      if (child.kind === "group") throw new Error("settings groups cannot nest");
+      items.push(rowToLeaf(child));
+    }
+    return { type: "group", heading: row.heading, items };
+  }
+  return rowToLeaf(row);
+}
+
+/** A leaf row (anything but a group) as a declarative item or page item. */
+function rowToLeaf(row: Exclude<SettingsRow, GroupRow>): SettingGroupItem<string> {
+  if (row.kind === "action") return { name: row.name, desc: row.desc, action: row.run };
+  if (row.kind === "render") return { name: row.name, desc: row.desc, render: row.render };
+  const control = row.control;
+  if (control.type === "dropdown") {
+    return {
+      name: row.name,
+      desc: row.desc,
+      control: {
+        key: row.key,
+        type: "dropdown",
+        options: dropdownOptions(control.options),
+      },
+    };
+  }
+  if (control.type === "slider") {
+    return {
+      name: row.name,
+      desc: row.desc,
+      control: { key: row.key, type: "slider", min: control.min, max: control.max, step: control.step },
+    };
+  }
+  if (control.type === "text") {
+    return {
+      name: row.name,
+      desc: row.desc,
+      control: { key: row.key, type: "text", placeholder: control.placeholder },
+    };
+  }
+  return { name: row.name, desc: row.desc, control: { key: row.key, type: "toggle" } };
 }

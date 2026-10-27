@@ -28,27 +28,25 @@ const vscode = require("vscode");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { writeFileAtomic } = require("./atomic-write");
 const still = require("./still-image");
 const video = require("./video-frame");
 const mp4 = require("./mp4");
-
-const MARK_START = "<!-- wallvia:start -->";
-const MARK_END = "<!-- wallvia:end -->";
-const CSS_FILENAME = "wallvia-bg.css";
-const LIVE_FILENAME = "wallvia-live.js";
-const STAMP_FILENAME = "wallvia-stamp.txt";
-const THUMB_DIRNAME = "thumbs";
-const CSS_BUILD = "wallvia-css-v5";
-const CONFIG_KEY = "wallvia";
-/** Picker cards are ~212 px wide; this covers a 2x display. */
-const THUMB_TARGET_WIDTH = 640;
-/**
- * How long the picker's webview gets to decode a video frame. The decode itself
- * takes well under a second; this only has to cover a stalled element.
- */
-const FRAME_TIMEOUT_MS = 20000;
-/** Pause before the single retry, so a large file has time to open. */
-const FRAME_RETRY_DELAY_MS = 700;
+const {
+  MARK_START,
+  MARK_END,
+  CSS_FILENAME,
+  LIVE_FILENAME,
+  STAMP_FILENAME,
+  THUMB_DIRNAME,
+  CSS_BUILD,
+  CONFIG_KEY,
+  THUMB_TARGET_WIDTH,
+  FRAME_TIMEOUT_MS,
+  FRAME_RETRY_DELAY_MS,
+} = require("./constants");
+const patch = require("./patch");
+const css = require("./css");
 
 /** @type {import('vscode').ExtensionContext} */
 let ctx = null;
@@ -57,6 +55,15 @@ let activatedAt = 0;
 
 /** @type {import('vscode').OutputChannel|null} */
 let channel = null;
+
+/**
+ * Status-bar badge, and whether this session has already warned about a failed
+ * patch. One warning per window is enough: the failure is sticky (permissions
+ * do not fix themselves) and re-warning on every layout change would be noise.
+ */
+/** @type {import('vscode').StatusBarItem|null} */
+let statusItem = null;
+let failureReported = false;
 
 /**
  * Record what the picker could not do.
@@ -77,16 +84,92 @@ function log(...parts) {
 }
 
 /**
+ * Update the status-bar badge, or hide it when there is nothing to say.
+ *
+ * A failed patch is otherwise invisible: the window simply keeps its old look,
+ * and the only trace was a `console.warn` in the extension-host log, which no
+ * user ever opens.
+ */
+function setStatusBadge(ok, detail) {
+  try {
+    if (!statusItem) return;
+    // Three states, because "off on purpose" and "patch failed" must not look the
+    // same: a grey crossed-out badge is the master switch being off, a warning
+    // triangle is something being wrong.
+    const off = !vscode.workspace.getConfiguration(CONFIG_KEY).get("enabled", true);
+    statusItem.text = !ok ? "$(warning) Wallvia" : off ? "$(circle-slash) Wallvia" : "Wallvia";
+    statusItem.tooltip = !ok
+      ? "Wallvia: " + (detail || "壁纸补丁未生效")
+      : off
+        ? "Wallvia: 壁纸已停用 — 点击启用"
+        : "Wallvia: 壁纸已启用 — 点击停用";
+    // Clicking the badge is the quickest way to kill the wallpaper before a
+    // screen share, so it toggles instead of only opening the panel.
+    statusItem.command = "wallvia.toggle";
+    statusItem.show();
+  } catch {
+    /* the badge is cosmetic: never fail an operation because of it */
+  }
+}
+
+/**
+ * Report a failed installation patch where the user can actually see it.
+ *
+ * Called from the automatic re-apply after a VS Code update, which is the one
+ * moment the extension writes to `Program Files` with no user gesture — and
+ * therefore the one moment a permission error used to be swallowed.
+ *
+ * @param {unknown} e
+ * @param {string} where
+ */
+async function reportPatchFailure(e, where) {
+  const message = (e && e.message) || String(e);
+  log(`patch failed (${where}): ${message}`);
+  setStatusBadge(false, message);
+  if (failureReported) return;
+  failureReported = true;
+  let choice;
+  try {
+    choice = await vscode.window.showWarningMessage(
+      "Wallvia: 无法写入 VS Code 安装目录,壁纸没有生效(" +
+        message +
+        ")。常见原因是 VS Code 装在 Program Files 下而当前没有管理员权限。",
+      "打开输出",
+      "重试"
+    );
+  } catch {
+    return;
+  }
+  if (choice === "打开输出") {
+    try {
+      if (channel) channel.show(true);
+    } catch {
+      /* an output channel that cannot be shown is not worth an error */
+    }
+  } else if (choice === "重试") {
+    failureReported = false;
+    try {
+      await patch.applyPatch();
+      setStatusBadge(true);
+      await reloadForFreshPatch();
+    } catch (again) {
+      await reportPatchFailure(again, "retry");
+    }
+  }
+}
+
+/**
  * The user-facing switches, read once per operation.
  * @returns {{hires:boolean, videoFrames:boolean, liveApply:boolean, themeAware:boolean}}
- */
-function options() {
+ */function options() {
   const cfg = vscode.workspace.getConfiguration(CONFIG_KEY);
   return {
     // Take the artwork out of scene.pkg instead of using the square preview.
     hires: cfg.get("hires", true),
     // Decode one frame of a video wallpaper (in the picker's Chromium).
     videoFrames: cfg.get("videoFrames", true),
+    // Play the video itself behind the workbench, instead of only its frame.
+    videoWallpaper: cfg.get("videoWallpaper", true),
     // Swap the stylesheet in place instead of reloading the whole window.
     liveApply: cfg.get("liveApply", true),
     // Pick the dim colour from the active theme (dark → near black).
@@ -96,189 +179,6 @@ function options() {
     // decode (a 3840x2160 PNG is ~33 MB of pixels once Chromium decodes it).
     maxImageWidth: Math.max(0, Number(cfg.get("maxImageWidth", 0)) || 0),
   };
-}
-
-function clamp(n, min, max, dflt) {
-  n = n == null ? dflt : Number(n);
-  if (!Number.isFinite(n)) n = dflt;
-  return Math.max(min, Math.min(max, n));
-}
-
-// ---------------------------------------------------------------- geometry
-
-/**
- * background-size / repeat for an alignment mode.
- * 覆盖 cover / 填充 fill / 居中 center; contain/tile are legacy values that
- * keep rendering so an old settings.json does not break.
- */
-function geometry(fit) {
-  switch (fit) {
-    case "fill":
-      return { size: "100% 100%", repeat: "no-repeat" };
-    case "center":
-      return { size: "auto", repeat: "no-repeat" };
-    case "contain": // legacy
-      return { size: "contain", repeat: "no-repeat" };
-    case "tile": // legacy
-      return { size: "360px auto", repeat: "repeat" };
-    case "cover":
-    default:
-      return { size: "cover", repeat: "no-repeat" };
-  }
-}
-
-// ------------------------------------------------------------------- css
-
-/**
- * Build the wallpaper CSS. The image must be referenced via
- * vscode-file://vscode-app/<abs> (CSP allows it; bare file:// is blocked).
- *
- * Layering (no pseudo-elements inside .monaco-workbench, no negative
- * z-index — both get clipped by VS Code's own stacking contexts):
- *   body::before  z-index 0  wallpaper
- *   body::after   z-index 1  dim wash
- *   workbench     z-index 2  transparent surfaces on top
- */
-function buildCss({ imageUri, imageVersion, dim, glass, mode, fit, light }) {
-  const g = geometry(fit);
-  const dimPct = clamp(dim, 0, 80, 45);
-  const glassPct = clamp(glass, 0, 100, 55);
-  // `wallvia.blur` is deliberately ignored: any backdrop-filter under the
-  // workbench makes Chromium repaint every editor and list on each frame.
-  // The wash follows the theme: a near-black veil on dark themes, a light one
-  // on light themes, instead of darkening a light workbench into mud.
-  const washRgb = light ? "246,247,250" : "8,10,18";
-  // The letterbox a `contain` wallpaper leaves visible gets the same tone.
-  const backdrop = light ? "#f2f3f6" : "#0b0d12";
-
-  // One dim wash over the whole window. fade mode = the same wash, softer.
-  const washA = ((mode === "fade" ? dimPct * 0.45 : dimPct) / 100).toFixed(3);
-  // Editor tint: glass=100 → fully clear editors, glass=0 → 85% theme color.
-  const tintPct = Math.round((100 - glassPct) * 0.85);
-
-  // Structural surfaces only — never a universal descendant selector.
-  const surfaces = [
-    ".monaco-workbench",
-    ".monaco-workbench .monaco-grid-view",
-    ".monaco-workbench .part.activitybar",
-    ".monaco-workbench .part.sidebar",
-    ".monaco-workbench .part.auxiliarybar",
-    ".monaco-workbench .part.panel",
-    ".monaco-workbench .part.editor",
-    ".monaco-workbench .part.titlebar",
-    ".monaco-workbench .part.statusbar",
-    ".monaco-workbench .part.editor>.content",
-    ".monaco-workbench .part.editor .editor-group-container",
-    ".monaco-workbench .part.editor .editor-container",
-    ".monaco-workbench .part.editor .tabs-and-actions-container",
-    ".monaco-workbench .part.editor .monaco-editor",
-    ".monaco-workbench .monaco-editor .overflow-guard",
-    ".monaco-workbench .monaco-editor .monaco-scrollable-element",
-    ".monaco-workbench .monaco-editor .monaco-editor-background",
-    ".monaco-workbench .monaco-editor .margin",
-    ".monaco-workbench .monaco-pane-view",
-    ".monaco-workbench .monaco-pane-view .pane",
-    ".monaco-workbench .monaco-pane-view .pane>.pane-header",
-    ".monaco-workbench .part.sidebar>.content",
-    ".monaco-workbench .part.auxiliarybar>.content",
-    ".monaco-workbench .part.panel>.content",
-    ".monaco-workbench .part.sidebar .pane-body",
-    ".monaco-workbench .part.auxiliarybar .pane-body",
-    ".monaco-workbench .part.panel .pane-body",
-    ".monaco-workbench .part.sidebar .monaco-list",
-    ".monaco-workbench .part.sidebar .monaco-list-rows",
-    ".monaco-workbench .part.auxiliarybar .monaco-list",
-    ".monaco-workbench .part.panel .monaco-list",
-    ".monaco-workbench .split-view-view",
-  ]
-    .map((s) => "html body " + s)
-    .join(",");
-
-  const rules = [
-    "/* Wallvia " + CSS_BUILD + ": one wallpaper layer, one dim wash, transparent workbench surfaces. */",
-    "html,html body{background:transparent!important}",
-    "html body::before{content:'';position:fixed;inset:0;z-index:0;pointer-events:none;" +
-      // The backing colour fills the area a "contain" wallpaper leaves empty,
-      // so the letterbox is a flat tone instead of the window's void.
-      "background-color:" + backdrop + ";" +
-      // `?v=` is the stored image's identity: without it Chromium keeps
-      // painting the previous wallpaper after the file is replaced.
-      "background-image:url('" + imageUri + (imageVersion ? "?v=" + imageVersion : "") + "');" +
-      "background-size:" + g.size + ";background-position:center;background-repeat:" + g.repeat + "}",
-    "html body::after{content:'';position:fixed;inset:0;z-index:1;pointer-events:none;background:rgba(" + washRgb + "," + washA + ")}",
-    "html body .monaco-workbench{position:relative;z-index:2;background:transparent!important}",
-    // Components that paint through theme variables: make those variables
-    // transparent so nothing has to fight per-component !important rules.
-    "html body .monaco-workbench{" +
-      "--vscode-editor-background:transparent;" +
-      "--vscode-sideBar-background:transparent;" +
-      "--vscode-sideBarSectionHeader-background:transparent;" +
-      "--vscode-panel-background:transparent;" +
-      "--vscode-activityBar-background:transparent;" +
-      "--vscode-titleBar-activeBackground:transparent;" +
-      "--vscode-titleBar-inactiveBackground:transparent;" +
-      "--vscode-statusBar-background:transparent;" +
-      "--vscode-tab-activeBackground:transparent;" +
-      "--vscode-tab-inactiveBackground:transparent;" +
-      "--vscode-editorGroupHeader-tabsBackground:transparent;" +
-      // The Output view paints its own editor background (0,5,0 rule), so the
-      // variable has to be neutralised or the panel shows an opaque block.
-      "--vscode-outputView-background:transparent;" +
-      // 1.141 modern UI: the floating sidebar/panel cards paint with
-      // `var(--vscode-surface-background)!important` and the shell paints with
-      // `var(--modern-ui-shell-background, ...)`. Neutralising the variables
-      // kills both without touching menus or the quick input.
-      "--vscode-surface-background:transparent;" +
-      "--modern-ui-shell-background:transparent;" +
-      "--vscode-modernUI-shellBackground:transparent}",
-    surfaces + "{background:transparent!important;background-color:transparent!important;background-image:none!important}",
-    // VS Code 1.140+ `floating-panels` rules are (0,3,0) `!important` rules
-    // (`.monaco-workbench.floating-panels .part.sidebar`), so the clear above
-    // — two classes — loses to them and the sidebar stays an opaque card.
-    // Repeat the real chain to outrank them.
-    [
-      ".monaco-workbench.floating-panels",
-      ".monaco-workbench.floating-panels>.monaco-grid-view",
-      ".monaco-workbench.floating-panels .part.sidebar",
-      ".monaco-workbench.floating-panels .part.auxiliarybar",
-      ".monaco-workbench.floating-panels .part.panel",
-      ".monaco-workbench.floating-panels .part.editor",
-      ".monaco-workbench.floating-panels .part.editor>.content",
-      ".monaco-workbench.floating-panels .webview-overlay-content",
-      ".monaco-workbench.floating-panels .part.titlebar",
-      ".monaco-workbench.floating-panels .part.statusbar",
-      ".monaco-workbench.floating-panels .part.activitybar",
-      ".monaco-workbench.floating-panels .monaco-pane-view .pane",
-      ".monaco-workbench.floating-panels .pane-body",
-      ".monaco-workbench.floating-panels .monaco-list",
-      ".monaco-workbench.floating-panels .monaco-list-rows",
-    ]
-      .map((s) => "html body " + s)
-      .join(",") +
-      "{background-color:transparent!important;background-image:none!important}",
-    ".monaco-editor .scroll-decoration{box-shadow:none!important}",
-  ];
-
-  if (tintPct > 0) {
-    // Slightly more specific than the clear above, so it wins for editors.
-    rules.push(
-      "html body .monaco-workbench .part.editor .monaco-editor .monaco-editor-background," +
-        "html body .monaco-workbench .part.editor .monaco-editor .margin{" +
-        "background-color:color-mix(in srgb,var(--vscode-editorWidget-background,#141821) " +
-        tintPct +
-        "%,transparent)!important}"
-    );
-  }
-
-  // Floating widgets keep an opaque theme background: text must never show
-  // the page underneath (the old universal selector caused exactly that).
-  rules.push(
-    ".quick-input-widget,.quick-input-container,.monaco-dialog,.monaco-dialog-box," +
-      ".monaco-menu-container,.context-view,.notifications-toasts{" +
-      "background-color:var(--vscode-editorWidget-background,#25272e)!important;background-image:none!important}"
-  );
-
-  return rules.join("\n");
 }
 
 // ----------------------------------------------------------------- thumbs
@@ -368,9 +268,9 @@ function readCached(cacheDir, base) {
 /** Write a cache entry (image + sidecar) and return it. */
 function writeCached(cacheDir, base, ext, bytes, info) {
   const file = path.join(cacheDir, base + ext);
-  fs.writeFileSync(file, bytes);
+  writeFileAtomic(file, bytes);
   try {
-    fs.writeFileSync(path.join(cacheDir, base + ".json"), JSON.stringify(info));
+    writeFileAtomic(path.join(cacheDir, base + ".json"), JSON.stringify(info));
   } catch {
     /* the sidecar is optional */
   }
@@ -499,236 +399,6 @@ function buildThumb(entry, opts) {
   );
 }
 
-// -------------------------------------------------------------- patching
-
-/** Paths to probe for workbench.html under appRoot (out/...), newest first. */
-function workbenchHtmlCandidates(appRoot) {
-  return [
-    path.join(appRoot, "out", "vs", "code", "electron-browser", "workbench", "workbench.html"),
-    path.join(appRoot, "out", "vs", "code", "electron-sandbox", "workbench", "workbench.html"),
-    path.join(appRoot, "out", "vs", "workbench", "workbench.html"),
-  ];
-}
-
-function findWorkbenchHtml(appRoot) {
-  for (const p of workbenchHtmlCandidates(appRoot)) {
-    if (fs.existsSync(p)) return p;
-  }
-  return null;
-}
-
-/** checksums key inside product.json is relative to out/. */
-function checksumKeyFor(htmlPath, appRoot) {
-  return path.relative(path.join(appRoot, "out"), htmlPath).split(path.sep).join("/");
-}
-
-/**
- * The stored wallpaper file name, self-healing when the recorded name is gone.
- * The extension name can legitimately change between runs — a scene package's
- * artwork is stored as `wallpaper.png` while a preview stays `wallpaper.jpg` —
- * so a stale record must never leave the window with no wallpaper at all.
- * @returns {string|null}
- */
-function resolveStoredImage() {
-  const dir = ctx.globalStorageUri.fsPath;
-  const recorded = ctx.globalState.get("image", null);
-  if (recorded && fs.existsSync(path.join(dir, recorded))) return recorded;
-  try {
-    for (const f of fs.readdirSync(dir)) {
-      if (/^wallpaper\./i.test(f)) return f;
-    }
-  } catch {
-    /* storage dir does not exist yet */
-  }
-  return null;
-}
-
-async function applyPatch() {
-  if (vscode.workspace.isTrusted === false) {
-    vscode.window.showWarningMessage(
-      "Wallvia: Restricted Mode 窗口不能修改 VS Code 安装文件,壁纸未应用。"
-    );
-    return false;
-  }
-  const cfg = vscode.workspace.getConfiguration(CONFIG_KEY);
-  const appRoot = vscode.env.appRoot; // ...\resources\app
-  const htmlPath = findWorkbenchHtml(appRoot);
-  if (!htmlPath) {
-    throw new Error("Could not locate workbench.html under " + appRoot);
-  }
-  const prodPath = path.join(appRoot, "product.json");
-  const bakPath = htmlPath + ".wallvia.bak";
-  const cssPath = path.join(path.dirname(htmlPath), CSS_FILENAME);
-
-  // 1) backup the original once
-  if (!fs.existsSync(bakPath)) {
-    fs.copyFileSync(htmlPath, bakPath);
-  }
-
-  const opts = options();
-  const livePath = path.join(path.dirname(htmlPath), LIVE_FILENAME);
-  const stampPath = path.join(path.dirname(htmlPath), STAMP_FILENAME);
-
-  // 2) disabled or no image → remove only our block, keep the backup
-  const imageRel = resolveStoredImage();
-  if (imageRel && imageRel !== ctx.globalState.get("image", null)) {
-    await ctx.globalState.update("image", imageRel); // self-healed record
-  }
-  if (!imageRel || !cfg.get("enabled", true)) {
-    let html = fs.readFileSync(htmlPath, "utf8");
-    const cleaned = html.replace(/<!-- wallvia:start -->[\s\S]*?<!-- wallvia:end -->/g, "");
-    if (cleaned !== html) {
-      fs.writeFileSync(htmlPath, cleaned);
-      fixChecksum(prodPath, checksumKeyFor(htmlPath, appRoot), htmlPath);
-    }
-    for (const f of [cssPath, livePath, stampPath]) {
-      if (fs.existsSync(f)) fs.unlinkSync(f);
-    }
-    return true;
-  }
-  const imageAbs = path.join(ctx.globalStorageUri.fsPath, imageRel);
-  if (!fs.existsSync(imageAbs)) {
-    throw new Error("Wallpaper image is missing: " + imageAbs);
-  }
-  // Build the URI through VS Code so it is percent-encoded. Doing it by hand
-  // breaks for paths with spaces or non-ASCII characters.
-  const imageUri = vscode.Uri.file(imageAbs)
-    .with({ scheme: "vscode-file", authority: "vscode-app" })
-    .toString();
-
-  // 3) write the css next to workbench.html (skip when unchanged so a
-  //    re-apply does not manufacture a bogus "reload needed" state)
-  const css = buildCss({
-    imageUri,
-    imageVersion: imageVersionOf(imageAbs),
-    dim: cfg.get("dim", 45),
-    glass: cfg.get("glass", 55),
-    mode: cfg.get("mode", "glass"),
-    fit: cfg.get("fit", "cover"),
-    light: opts.themeAware && isLightTheme(),
-  });
-  const prevCss = fs.existsSync(cssPath) ? fs.readFileSync(cssPath, "utf8") : null;
-  if (prevCss !== css) {
-    fs.writeFileSync(cssPath, css);
-  }
-  const stamp = Math.floor(fs.statSync(cssPath).mtimeMs);
-  // The live script polls this file; a change makes it swap the <link> in
-  // place, so effects apply without reloading the whole window.
-  if (opts.liveApply) {
-    if (!fs.existsSync(livePath) || fs.readFileSync(livePath, "utf8") !== LIVE_SCRIPT) {
-      fs.writeFileSync(livePath, LIVE_SCRIPT);
-    }
-    if (!fs.existsSync(stampPath) || fs.readFileSync(stampPath, "utf8").trim() !== String(stamp)) {
-      fs.writeFileSync(stampPath, String(stamp));
-    }
-  }
-
-  // 4) idempotent cache-busted injection, touching only our block
-  let html = fs.readFileSync(htmlPath, "utf8");
-  const marker =
-    MARK_START +
-    '<link rel="stylesheet" href="./' + CSS_FILENAME + "?wallvia=" + stamp + '" />' +
-    (opts.liveApply
-      ? '<script src="./' + LIVE_FILENAME + "?wallvia=" + stamp + '"></script>'
-      : "") +
-    MARK_END;
-  if (!html.includes(marker)) {
-    html = html.replace(/<!-- wallvia:start -->[\s\S]*?<!-- wallvia:end -->/g, "");
-    html = html.replace("</head>", "  " + marker + "\n</head>");
-    fs.writeFileSync(htmlPath, html);
-    fixChecksum(prodPath, checksumKeyFor(htmlPath, appRoot), htmlPath);
-  }
-
-  // 5) remember which VS Code version this patch was made under
-  await ctx.globalState.update("appliedVersion", vscode.version);
-  await ctx.globalState.update("appliedImageRel", imageRel);
-  return true;
-}
-
-/**
- * A cache-busting token for the wallpaper file: a hash of its bytes.
- *
- * The token used to be the file's mtime + size, which is wrong here for a
- * Windows-specific reason: `fs.copyFileSync` **preserves the source's
- * timestamps**, so re-applying a wallpaper whose cached artwork is unchanged
- * produced a byte-identical URL — and the renderer reused the bitmap it already
- * had, making a real change look like nothing happened. A hash changes exactly
- * when the pixels do, and never otherwise.
- */
-function imageVersionOf(file) {
-  try {
-    return "h" + crypto.createHash("sha1").update(fs.readFileSync(file)).digest("hex").slice(0, 16);
-  } catch {
-    const stat = fs.statSync(file);
-    return Math.floor(stat.mtimeMs) + "-" + stat.size;
-  }
-}
-
-/**
- * The stylesheet swap used for live apply.
- *
- * The workbench loads its CSS once at startup, so an effect change used to
- * require a full window reload. This script — served from the same folder as
- * the stylesheet and therefore allowed by `script-src 'self'` — polls a tiny
- * stamp file and repoints the <link> when it changes, which re-reads the CSS
- * without touching the rest of the window.
- *
- * `require-trusted-types-for 'script'` is why this uses fetch + href instead of
- * injecting a new <script> element: only the former is allowed under the
- * workbench CSP.
- */
-const LIVE_SCRIPT = `/* Wallvia live apply — swaps the stylesheet when the stamp changes. */
-(function () {
-  var link = document.querySelector('link[href*="wallvia-bg.css"]');
-  if (!link) return;
-  var current = link.getAttribute('href');
-  var base = current.split('?')[0];
-  function check() {
-    if (document.hidden) return;
-    fetch('./wallvia-stamp.txt', { cache: 'no-store' })
-      .then(function (r) { return r.ok ? r.text() : ''; })
-      .then(function (s) {
-        s = String(s).trim();
-        if (!s) return;
-        var href = base + '?wallvia=' + s;
-        if (href !== current) { current = href; link.setAttribute('href', href); }
-      })
-      .catch(function () {});
-  }
-  setInterval(check, 2000);
-  document.addEventListener('visibilitychange', check);
-})();
-`;
-
-/** Whether the active theme is a light one (drives the wash colour). */
-function isLightTheme() {
-  try {
-    const kind = vscode.window.activeColorTheme && vscode.window.activeColorTheme.kind;
-    // ColorThemeKind: 1 = Light, 2 = Dark, 3 = HighContrast, 4 = HC Light.
-    return kind === 1 || kind === 4;
-  } catch {
-    return false;
-  }
-}
-
-function fixChecksum(prodPath, key, htmlPath) {
-  const prod = JSON.parse(fs.readFileSync(prodPath, "utf8"));
-  prod.checksums = prod.checksums || {};
-  // VS Code stores sha256 as *unpadded* base64 (43 chars); writing hex makes
-  // every startup show "Your Code installation appears to be corrupt."
-  prod.checksums[key] = fileChecksum(htmlPath);
-  fs.writeFileSync(prodPath, JSON.stringify(prod, null, "\t"));
-}
-
-/** The exact checksum format VS Code expects: sha256, base64, no padding. */
-function fileChecksum(file) {
-  return crypto
-    .createHash("sha256")
-    .update(fs.readFileSync(file))
-    .digest("base64")
-    .replace(/=+$/, "");
-}
-
 // ------------------------------------------------------------------ cmds
 
 /**
@@ -751,9 +421,13 @@ function clearStoredWallpapers() {
 }
 
 /** Store the choice, patch the workbench and reload so it becomes visible. */
-async function storeAndApply(dstDir, imageRel, label, info) {
+async function storeAndApply(dstDir, imageRel, label, info, videoPath) {
   await ctx.globalState.update("image", imageRel);
   await ctx.globalState.update("imageInfo", info);
+  // The poster above is what shows before frame 1; this is the moving picture.
+  // Always written (null clears it), so switching from a video to a still cannot
+  // leave the old video playing behind the new picture.
+  await ctx.globalState.update("videoPath", videoPath || null);
 
   // Picking a wallpaper means wanting to see it: re-enable if disabled.
   const cfg = vscode.workspace.getConfiguration(CONFIG_KEY);
@@ -762,15 +436,17 @@ async function storeAndApply(dstDir, imageRel, label, info) {
   }
 
   try {
-    await applyPatch();
+    await patch.applyPatch();
   } catch (e) {
     vscode.window.showErrorMessage("Wallpaper failed to apply: " + (e && e.message));
     return false;
   }
   const size = info && info.width ? info.width + "×" + info.height + " · " + info.origin + " — " : "";
+  const moving = videoPath && cfg.get("videoWallpaper", true) ? "播放中(抽帧作封面) — " : "";
   vscode.window.showInformationMessage(
     (label ? label + " — " : "") +
       size +
+      moving +
       (options().liveApply ? "applied (live)." : "applied; the window reloads to show it.")
   );
   await settle();
@@ -801,7 +477,7 @@ function storeCopy(dstDir, src, origin) {
 async function setImageFromFile(src, label) {
   const dstDir = clearStoredWallpapers();
   const { imageRel, info } = storeCopy(dstDir, src, "file");
-  return storeAndApply(dstDir, imageRel, label, info);
+  return storeAndApply(dstDir, imageRel, label, info, null);
 }
 
 /**
@@ -828,28 +504,51 @@ async function applyWallpaperSource(entry) {
   const hi = opts.hires ? buildHiRes(entry, opts.maxImageWidth) : null;
   if (hi) {
     fs.copyFileSync(hi.file, path.join(dstDir, "wallpaper.png"));
-    return storeAndApply(dstDir, "wallpaper.png", label, {
-      origin: "scene.pkg",
-      source: file,
-      width: hi.width,
-      height: hi.height,
-    });
+    return storeAndApply(
+      dstDir,
+      "wallpaper.png",
+      label,
+      {
+        origin: "scene.pkg",
+        source: file,
+        width: hi.width,
+        height: hi.height,
+      },
+      null
+    );
   }
 
   // 2) video → the frame the picker decoded (cached in the shared temp folder).
-  //    The frame's own size is reported, never the square preview's.
+  //    The frame's own size is reported, never the square preview's. The file
+  //    itself is handed on as well: with `videoWallpaper` on it becomes the
+  //    moving layer, and the frame above becomes its poster.
   if (opts.videoFrames && still.VIDEO_EXT.test(file)) {
     const native = mp4.readVideoSize(file);
     const width = video.frameWidthForApply(opts.maxImageWidth, native && native.width);
     const frame = video.readVideoFrame(file, width);
     if (frame) {
-      fs.writeFileSync(path.join(dstDir, "wallpaper.jpg"), frame.bytes);
-      return storeAndApply(dstDir, "wallpaper.jpg", label, {
-        origin: "video frame",
-        source: file,
-        width: frame.width,
-        height: frame.height,
-      });
+      writeFileAtomic(path.join(dstDir, "wallpaper.jpg"), frame.bytes);
+      return storeAndApply(
+        dstDir,
+        "wallpaper.jpg",
+        label,
+        {
+          origin: "video frame",
+          source: file,
+          width: frame.width,
+          height: frame.height,
+        },
+        file
+      );
+    }
+    // No cached frame yet, but the video itself can still play: the still falls
+    // through to the preview, and the layer is what the user sees anyway.
+    if (opts.videoWallpaper && still.VIDEO_EXT.test(file)) {
+      const preview = entry.preview && fs.existsSync(entry.preview) ? entry.preview : null;
+      if (preview) {
+        const copied = storeCopy(dstDir, preview, "preview");
+        return storeAndApply(dstDir, copied.imageRel, label, copied.info, file);
+      }
     }
   }
 
@@ -863,7 +562,7 @@ async function applyWallpaperSource(entry) {
     return false;
   }
   const copied = storeCopy(dstDir, source, preview ? "preview" : "file");
-  return storeAndApply(dstDir, copied.imageRel, label, copied.info);
+  return storeAndApply(dstDir, copied.imageRel, label, copied.info, null);
 }
 
 /** Choose a static image file from disk. */
@@ -882,14 +581,41 @@ async function pickAndApply() {
 /** Human labels for where a wallpaper came from. */
 const SOURCE_LABEL = { workshop: "创意工坊", mine: "我的项目", builtin: "内置" };
 
-/** Wallpaper Engine install + how many wallpapers are downloaded. */
-function weInfo() {
+/**
+ * Why the Wallpaper Engine module could not be loaded, or null.
+ *
+ * A bare `catch {}` here turned "the extension is half-installed" into
+ * "Wallpaper Engine is not installed" — two very different problems reported
+ * with the same empty state. The realistic cause is an extension directory that
+ * was replaced or removed while its host was still running: the module is
+ * `require`d lazily, so it fails on first use, long after activation succeeded.
+ */
+let weLoadError = null;
+
+/** Load the Wallpaper Engine module, remembering why it failed. */
+function loadWe() {
   try {
     const mod = require("./wallpaper-engine");
+    weLoadError = null;
+    return mod;
+  } catch (e) {
+    weLoadError = (e && e.message) || String(e);
+    log("wallpaper-engine module failed to load: " + weLoadError);
+    return null;
+  }
+}
+
+/** Wallpaper Engine install + how many wallpapers are downloaded. */
+function weInfo() {
+  const mod = loadWe();
+  if (!mod) return { root: null, count: 0, error: weLoadError };
+  try {
     const root = mod.weRoot();
-    return { root, count: root ? mod.listDownloadedWallpapers().length : 0 };
-  } catch {
-    return { root: null, count: 0 };
+    return { root, count: root ? mod.listDownloadedWallpapers().length : 0, error: null };
+  } catch (e) {
+    weLoadError = (e && e.message) || String(e);
+    log("wallpaper-engine scan failed: " + weLoadError);
+    return { root: null, count: 0, error: weLoadError };
   }
 }
 
@@ -904,7 +630,8 @@ function weInfo() {
  * @returns {{root:string, count:number, items:Array<object>}|null}
  */
 function weEntries() {
-  const mod = require("./wallpaper-engine");
+  const mod = loadWe();
+  if (!mod) return null;
   const root = mod.weRoot();
   if (!root) return null;
   const all = mod.listDownloadedWallpapers(true);
@@ -963,11 +690,15 @@ function wePickerHtml(items, cspSource, opts) {
         item.thumb && item.thumb.sourceWidth
           ? `<span class="px">${item.thumb.sourceWidth}×${item.thumb.sourceHeight}</span>`
           : "";
+      // A play glyph on the preview, not just "视频" in the meta line: the meta
+      // is 11px grey text, and "this one moves" is the fact a user needs before
+      // applying. Same corner as the "current" badge, opposite side.
+      const play = item.videoUri ? `<span class="badge play" aria-label="视频壁纸">▶</span>` : "";
       return (
         `<button class="card" data-i="${i}" data-key="${escapeHtml(
           (item.title + " " + item.meta + " " + item.detail).toLowerCase()
         )}"${item.videoUri ? ` data-video="${escapeHtml(item.videoUri)}"` : ""} title="${escapeHtml(item.detail)}">` +
-        `<span class="shot">${shot}${item.current ? '<span class="badge current">当前</span>' : ""}${pixels}</span>` +
+        `<span class="shot">${shot}${play}${item.current ? '<span class="badge current">当前</span>' : ""}${pixels}</span>` +
         `<span class="title">${escapeHtml(item.title)}</span>` +
         `<span class="meta">${escapeHtml(item.meta)}</span>` +
         `<span class="apply">应用</span>` +
@@ -1010,6 +741,13 @@ function wePickerHtml(items, cspSource, opts) {
   .thumb.missing{font-size:11px;color:var(--vscode-descriptionForeground);text-align:center;padding:0 8px}
   .badge.current{position:absolute;top:6px;right:6px;margin:0;padding:1px 7px;border-radius:999px;
     font-size:10px;background:var(--vscode-badge-background,#c33);color:var(--vscode-badge-foreground,#fff)}
+  /* "This one moves": mirror of the current badge, opposite corner. Sized to
+     read at a glance on a 212 px card — the first version was 20 px with a 10 px
+     glyph, which disappeared against a busy wallpaper. */
+  .badge.play{position:absolute;top:8px;left:8px;width:30px;height:30px;margin:0;padding:0 0 0 3px;
+    display:flex;align-items:center;justify-content:center;border-radius:999px;font-size:15px;
+    line-height:1;background:rgba(0,0,0,.62);color:#fff;pointer-events:none;
+    box-shadow:0 1px 4px rgba(0,0,0,.45)}
   .px{position:absolute;left:6px;bottom:6px;padding:1px 6px;border-radius:999px;font-size:10px;
     background:rgba(0,0,0,.55);color:#fff}
   .title{font-size:13px;font-weight:600;line-height:1.4;overflow:hidden;
@@ -1227,11 +965,14 @@ function escapeHtml(s) {  return String(s == null ? "" : s)
 async function clearWallpaper() {
   await ctx.globalState.update("image", null);
   await ctx.globalState.update("imageInfo", null);
+  // Also the moving picture: a video left behind here would keep playing after
+  // the user removed the wallpaper.
+  await ctx.globalState.update("videoPath", null);
   // Drop the stored copy as well: "remove" must leave nothing behind, and a
   // leftover file would otherwise be re-adopted by the self-healing lookup.
   clearStoredWallpapers();
   try {
-    await applyPatch();
+    await patch.applyPatch();
     vscode.window.showInformationMessage("Wallpaper removed; the window reloads.");
   } catch (e) {
     vscode.window.showErrorMessage("Failed to remove wallpaper: " + (e && e.message));
@@ -1239,11 +980,40 @@ async function clearWallpaper() {
   await settle();
 }
 
+/**
+ * The one switch that turns the wallpaper off completely.
+ *
+ * Distinct from "Remove Wallpaper": that forgets which picture was chosen, this
+ * keeps it and only stops painting it — the thing you want when a screen share
+ * is about to start and you want the wallpaper back afterwards without hunting
+ * for the same wallpaper again.
+ *
+ * Off means off: `applyPatch` strips the injected block and deletes the
+ * generated stylesheet, script and stamp, so the workbench is back to stock
+ * rather than merely covered.
+ */
+async function toggleEnabled() {
+  const cfg = vscode.workspace.getConfiguration(CONFIG_KEY);
+  const next = !cfg.get("enabled", true);
+  await cfg.update("enabled", next, vscode.ConfigurationTarget.Global);
+  try {
+    await patch.applyPatch();
+  } catch (e) {
+    await reportPatchFailure(e, next ? "enable" : "disable");
+    return;
+  }
+  setStatusBadge(true);
+  vscode.window.showInformationMessage(
+    next ? "Wallvia: 壁纸已启用。" : "Wallvia: 壁纸已停用(补丁已移除,选择的壁纸仍然保留)。"
+  );
+  await settle();
+}
+
 async function toggleGlass() {
   const cfg = vscode.workspace.getConfiguration(CONFIG_KEY);
   const mode = cfg.get("mode", "glass");
   await cfg.update("mode", mode === "glass" ? "fade" : "glass", vscode.ConfigurationTarget.Global);
-  await applyPatch();
+  await patch.applyPatch();
   await settle();
 }
 
@@ -1270,7 +1040,7 @@ function settle() {
 
 function statusString() {
   const cfg = vscode.workspace.getConfiguration(CONFIG_KEY);
-  const htmlPath = findWorkbenchHtml(vscode.env.appRoot);
+  const htmlPath = patch.findWorkbenchHtml(vscode.env.appRoot);
   let patched = false;
   let patchMtime = 0;
   if (htmlPath && fs.existsSync(htmlPath)) {
@@ -1303,10 +1073,19 @@ function statusString() {
       fit: cfg.get("fit", "cover"),
       hires: cfg.get("hires", true),
       videoFrames: cfg.get("videoFrames", true),
+      videoWallpaper: cfg.get("videoWallpaper", true),
+      videoMuted: cfg.get("videoMuted", true),
+      videoPauseUnfocused: cfg.get("videoPauseUnfocused", true),
       liveApply: cfg.get("liveApply", true),
       themeAware: cfg.get("themeAware", true),
       maxImageWidth: cfg.get("maxImageWidth", 0),
     },
+    // Whether the *current* wallpaper is a video, so the panel can say why its
+    // three video switches do or do not do anything right now.
+    videoPath: (() => {
+      const p = ctx.globalState.get("videoPath", null);
+      return p && fs.existsSync(p) ? p : null;
+    })(),
     we: weInfo(),
     // A patch written after this window's extension host came up is on disk
     // but invisible until the window reloads.
@@ -1798,7 +1577,7 @@ function initSettingsPanel(panel) {
     } else if (msg.type === "config") {
       const cfg = vscode.workspace.getConfiguration(CONFIG_KEY);
       await cfg.update(msg.key, msg.value, vscode.ConfigurationTarget.Global);
-      await applyPatch().catch(() => undefined);
+      await patch.applyPatch().catch(() => undefined);
       sendStatus();
     } else if (msg.type === "reload") {
       await vscode.commands.executeCommand("workbench.action.reloadWindow");
@@ -1831,7 +1610,8 @@ function panelHtml(cspSource) {
   </div>
 
   <div class="card">
-    <div class="row"><label for="enabled">Enabled</label><input type="checkbox" id="enabled" /></div>
+    <div class="row"><label for="enabled">启用壁纸(总开关)</label><input type="checkbox" id="enabled" /></div>
+    <p class="hint">关掉即完全停用:注入的补丁与生成的样式表都会被移除,工作台恢复原样,但**选择的壁纸会保留**,重新打开立刻回来。</p>
     <div class="row"><label for="dim">压暗 Deep</label><input type="range" id="dim" min="0" max="80" step="1" /><span class="val" id="dimVal"></span></div>
     <div class="row"><label for="glass">通透 Glass</label><input type="range" id="glass" min="0" max="100" step="1" /><span class="val" id="glassVal"></span></div>
     <p class="hint">模糊 Blur:<b>本版本不做</b>。任何 <code>backdrop-filter</code> 都会让 Chromium 每帧重绘整个窗口
@@ -1850,6 +1630,13 @@ function panelHtml(cspSource) {
     <div class="row"><label for="maxImageWidth">最大图源宽度</label><input type="number" id="maxImageWidth" min="0" max="7680" step="160" /><span class="val">px</span></div>
     <p class="hint">关闭"即时生效"后,改动需要点下面的按钮重载窗口才会出现。最大图源宽度 0 = 用最清晰的一级(显存占用最大,4K 图约 33MB)。</p>
   </div>
+
+  <div class="card">
+    <div class="row"><label for="videoWallpaper">视频壁纸播放</label><input type="checkbox" id="videoWallpaper" /></div>
+    <div class="row"><label for="videoMuted">视频静音</label><input type="checkbox" id="videoMuted" /></div>
+    <div class="row"><label for="videoPauseUnfocused">失焦时暂停视频</label><input type="checkbox" id="videoPauseUnfocused" /></div>
+    <p class="hint" id="videoInfo"></p>
+  </div>
   <p class="hint" id="reloadNote">更改已写入磁盘 — 需要重载窗口才能看到。</p>
   <button id="reload">立即重载窗口</button>
 
@@ -1866,7 +1653,8 @@ function panelHtml(cspSource) {
     const cfg = s.config;
     $("badge").textContent = s.patched ? "已注入" : "未注入";
     $("badge").className = "badge " + (s.patched ? "ok" : "no");
-    for (const key of ["enabled", "hires", "videoFrames", "liveApply", "themeAware"]) {
+    for (const key of ["enabled", "hires", "videoFrames", "liveApply", "themeAware",
+      "videoWallpaper", "videoMuted", "videoPauseUnfocused"]) {
       $(key).checked = cfg[key] !== false;
     }
     $("dim").value = cfg.dim; setRange("dim", cfg.dim, "%");
@@ -1874,14 +1662,24 @@ function panelHtml(cspSource) {
     $("fit").value = cfg.fit;
     $("mode").value = cfg.mode;
     $("maxImageWidth").value = cfg.maxImageWidth || 0;
-    $("weInfo").textContent = s.we && s.we.root
-      ? "Wallpaper Engine: 已找到 " + s.we.count + " 张已下载壁纸"
-      : "未检测到 Wallpaper Engine(仅 Windows 桌面端可用)";
+    $("weInfo").textContent = s.we && s.we.error
+      ? "Wallpaper Engine 模块加载失败:" + s.we.error + " — 重载窗口通常即可恢复(扩展目录可能已被更新或移除)。"
+      : s.we && s.we.root
+        ? "Wallpaper Engine: 已找到 " + s.we.count + " 张已下载壁纸"
+        : "未检测到 Wallpaper Engine(仅 Windows 桌面端可用)";
     const info = s.imageInfo;
     $("srcInfo").textContent = info
       ? "当前图源:" + (info.width ? info.width + "×" + info.height + " · " : "") + (info.origin || "?") +
         (info.width && info.width < 1920 ? " — 分辨率偏低,场景包内大图未能取出" : "")
       : "";
+    // What the video card is actually doing, not just what its switches say:
+    // "开关打开但没有视频" and "有视频但开关关掉" both look like nothing happens.
+    const hasVideo = Boolean(s.videoPath);
+    $("videoInfo").textContent = hasVideo
+      ? cfg.videoWallpaper
+        ? "当前壁纸是视频,正在播放(抽帧作封面)。"
+        : "当前壁纸是视频,播放已关闭,只显示封面帧。"
+      : "当前壁纸不是视频,这三个开关在选中视频壁纸后生效。";
     $("reloadNote").style.display = s.reloadNeeded ? "" : "none";
   }
 
@@ -1908,6 +1706,9 @@ function panelHtml(cspSource) {
   wire("liveApply", "liveApply");
   wire("themeAware", "themeAware");
   wire("maxImageWidth", "maxImageWidth");
+  wire("videoWallpaper", "videoWallpaper");
+  wire("videoMuted", "videoMuted");
+  wire("videoPauseUnfocused", "videoPauseUnfocused");
 
   window.addEventListener("message", (e) => { if (e.data.type === "status") render(e.data.status); });
   vscode.postMessage({ type: "status" });
@@ -1917,41 +1718,6 @@ function panelHtml(cspSource) {
 }
 
 // ---------------------------------------------------------------- activate
-
-/**
- * Restore the original workbench.html from the backup Wallvia keeps.
- *
- * The escape hatch for "I want my install back": it also drops the generated
- * stylesheet, the live-apply script and the stamp file so nothing of ours is
- * left behind, and fixes the checksum on the restored file.
- */
-async function restoreWorkbench() {
-  const appRoot = vscode.env.appRoot;
-  const htmlPath = findWorkbenchHtml(appRoot);
-  if (!htmlPath) {
-    vscode.window.showErrorMessage("Wallvia: could not locate workbench.html.");
-    return false;
-  }
-  const bakPath = htmlPath + ".wallvia.bak";
-  const dir = path.dirname(htmlPath);
-  if (fs.existsSync(bakPath)) {
-    fs.copyFileSync(bakPath, htmlPath);
-  } else {
-    const html = fs.readFileSync(htmlPath, "utf8");
-    const cleaned = html.replace(/<!-- wallvia:start -->[\s\S]*?<!-- wallvia:end -->/g, "");
-    if (cleaned !== html) fs.writeFileSync(htmlPath, cleaned);
-  }
-  for (const name of [CSS_FILENAME, LIVE_FILENAME, STAMP_FILENAME]) {
-    const f = path.join(dir, name);
-    if (fs.existsSync(f)) fs.unlinkSync(f);
-  }
-  const prodPath = path.join(appRoot, "product.json");
-  if (fs.existsSync(prodPath)) {
-    fixChecksum(prodPath, checksumKeyFor(htmlPath, appRoot), htmlPath);
-  }
-  vscode.window.showInformationMessage("Wallvia: workbench.html 已还原,重载窗口后生效。");
-  return true;
-}
 
 /**
  * Warn once when another wallpaper extension is configured at the same time:
@@ -1986,14 +1752,25 @@ async function activate(context) {
   } catch {
     /* the log file still gets everything */
   }
+  try {
+    // Right-hand badge: "Wallvia" once the patch is known to be in place, a
+    // warning triangle when it is not. Clicking it opens the panel.
+    statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    statusItem.command = "wallvia.openUI";
+    context.subscriptions.push(statusItem);
+    setStatusBadge(true);
+  } catch {
+    /* the badge is optional: tests and remote hosts may not have a status bar */
+  }
   log(`activate: extension ${context.extension && context.extension.packageJSON ? context.extension.packageJSON.version : "?"}`);
   context.subscriptions.push(
     vscode.commands.registerCommand("wallvia.set", pickAndApply),
     vscode.commands.registerCommand("wallvia.pickWE", createWePicker),
     vscode.commands.registerCommand("wallvia.clear", clearWallpaper),
     vscode.commands.registerCommand("wallvia.toggleGlass", toggleGlass),
+    vscode.commands.registerCommand("wallvia.toggle", toggleEnabled),
     vscode.commands.registerCommand("wallvia.openUI", createPanel),
-    vscode.commands.registerCommand("wallvia.restore", restoreWorkbench),
+    vscode.commands.registerCommand("wallvia.restore", patch.restoreWorkbench),
     vscode.commands.registerCommand("wallvia.status", () =>
       vscode.window.showInformationMessage(JSON.stringify(statusString(), null, 2))
     )
@@ -2004,7 +1781,7 @@ async function activate(context) {
     context.subscriptions.push(
       vscode.workspace.onDidChangeConfiguration((e) => {
         if (!e || typeof e.affectsConfiguration !== "function" || e.affectsConfiguration(CONFIG_KEY)) {
-          applyPatch().catch(() => undefined);
+          patch.applyPatch().catch(() => undefined);
         }
       })
     );
@@ -2038,14 +1815,15 @@ async function activate(context) {
   if (cfg.get("autoReapply", true) && ctx.globalState.get("image", null)) {
     let stale = ctx.globalState.get("appliedVersion", null) !== vscode.version;
     if (!stale) {
-      const htmlPath = findWorkbenchHtml(vscode.env.appRoot);
+      const htmlPath = patch.findWorkbenchHtml(vscode.env.appRoot);
       const cssPath = htmlPath ? path.join(path.dirname(htmlPath), CSS_FILENAME) : null;
       const cur = cssPath && fs.existsSync(cssPath) ? fs.readFileSync(cssPath, "utf8") : "";
       stale = !cur.includes(CSS_BUILD);
     }
     if (stale) {
       try {
-        await applyPatch();
+        await patch.applyPatch();
+        setStatusBadge(true);
         // This window loaded workbench.html *before* that patch existed, so its
         // document has no <link> and no live-apply script — nothing in it can
         // ever show the wallpaper. A reload is the only way for it to read the
@@ -2053,9 +1831,11 @@ async function activate(context) {
         // user with a window that silently ignores every change.
         await reloadForFreshPatch();
       } catch (e) {
-        console.warn("wallvia re-apply failed:", e && e.message);
+        await reportPatchFailure(e, "auto-reapply");
       }
     }
+  } else {
+    setStatusBadge(true);
   }
 }
 
@@ -2088,15 +1868,43 @@ async function reloadForFreshPatch() {
   await vscode.commands.executeCommand("workbench.action.reloadWindow");
 }
 
-function deactivate() {}
+/**
+ * VS Code calls this on reload, on disable and on uninstall alike.
+ *
+ * Restoring unconditionally would undo the patch on every window reload, and the
+ * next activation would have to write it straight back — which makes every
+ * reload need a second reload to pick the patch up again. The one signal that
+ * separates "uninstalled" from "reload" is that VS Code has already removed this
+ * extension's own folder by the time it gets here. Only then is the install
+ * cleaned up: an uninstalled extension must not leave a stylesheet and a
+ * `<script>` behind in the workbench.
+ *
+ * The explicit path stays available too: `Wallvia: Restore workbench.html`.
+ */
+async function deactivate() {
+  try {
+    if (!ctx || !ctx.extensionPath) return;
+    if (fs.existsSync(ctx.extensionPath)) return; // reload/disable: keep the patch
+    const done = await patch.restoreWorkbench({ quiet: true });
+    log(done ? "deactivate: extension folder is gone — workbench restored" : "deactivate: nothing to restore");
+  } catch (e) {
+    log("deactivate: cleanup failed: " + ((e && e.message) || e));
+  }
+}
+
+patch.init({ getCtx: () => ctx, options, log });
 
 module.exports = { activate, deactivate };
 // Test/deployment hooks (ignored by VS Code).
 module.exports.__internals = {
-  buildCss,
-  geometry,
+  buildCss: css.buildCss,
+  geometry: css.geometry,
   statusString,
-  applyPatch: () => applyPatch(),
+  applyPatch: () => patch.applyPatch(),
+  restoreWorkbench: patch.restoreWorkbench,
+  toggleEnabled,
+  deactivate,
+  reportPatchFailure,
   applyWallpaperSource,
   setImageFromFile,
   weEntries,
@@ -2104,5 +1912,5 @@ module.exports.__internals = {
   buildThumb,
   cachedThumb,
   buildHiRes,
-  imageVersionOf,
+  imageVersionOf: patch.imageVersionOf,
 };

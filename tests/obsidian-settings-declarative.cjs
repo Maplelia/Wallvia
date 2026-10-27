@@ -112,7 +112,19 @@ async function run() {
       { cover: "覆盖 Cover", fill: "填充 Fill", center: "居中 Center" },
       "Fit options"
     );
-    assert.deepEqual(groups, ["Wallpaper Engine", "可选行为"], "two sibling headings");
+    // Three sibling groups: video playback got its own heading instead of being
+    // flattened into "可选行为", because it changes what the wallpaper *is*.
+    assert.deepEqual(
+      groups,
+      ["Wallpaper Engine", "视频壁纸", "可选行为"],
+      "three sibling headings"
+    );
+    assert.ok(
+      defs.some((d) => d.name === "视频壁纸播放") &&
+        defs.some((d) => d.name === "视频静音") &&
+        defs.some((d) => d.name === "失焦时暂停视频"),
+      "the video group holds all three switches"
+    );
 
     const names = defs.map((d) => d.name);
     for (const row of ["背景图片", "压暗颜色 Wash", "选择已下载的壁纸", "恢复默认效果"]) {
@@ -137,6 +149,10 @@ async function run() {
       String(preview.style.backgroundImage).includes("app://vault/Wallpapers/a.png"),
       "the preview points at the current image"
     );
+    assert.ok(
+      !oneByClass(host, "wallvia-preview-note"),
+      "a still wallpaper gets no video caption under the preview"
+    );
 
     const buttons = host.children
       .map((c) => c.__setting)
@@ -159,6 +175,47 @@ async function run() {
       });
     assert.ok(washRow, "the wash row still holds a dropdown *and* a colour picker");
     assert.ok(oneByClass(host, "wallvia-we-status"), "the async status line is rendered");
+
+    // ---- a video wallpaper says so under the preview --------------------
+    // The preview is the poster in that case, and "playing" vs "switched off"
+    // would otherwise look identical on this page.
+    tab.plugin.settings.videoPath = "C:/we/projects/1/a.mp4";
+    tab.plugin.settings.videoWallpaper = true;
+    host.empty();
+    for (const def of defs.filter((d) => d.render)) {
+      def.render(new obsidian.Setting(host), { listEl: host });
+    }
+    let note = oneByClass(host, "wallvia-preview-note");
+    assert.ok(note, "a video wallpaper gets a caption under the preview");
+    assert.ok(/播放中/.test(note.textContent), "…saying it is playing");
+
+    tab.plugin.settings.videoWallpaper = false;
+    host.empty();
+    for (const def of defs.filter((d) => d.render)) {
+      def.render(new obsidian.Setting(host), { listEl: host });
+    }
+    note = oneByClass(host, "wallvia-preview-note");
+    assert.ok(/已关闭播放/.test(note.textContent), "…and saying so when playback is off");
+    tab.plugin.settings.videoPath = "";
+    tab.plugin.settings.videoWallpaper = true;
+    host.empty();
+    for (const def of defs.filter((d) => d.render)) {
+      def.render(new obsidian.Setting(host), { listEl: host });
+    }
+
+    // ---- a swallowed failure becomes a row, not silence -----------------
+    plugin.lastError = { at: "读取壁纸文件", message: "boom", when: Date.now() };
+    const failure = tab.getSettingDefinitions().find((d) => d.name === "上次失败");
+    assert.ok(failure, "a recorded failure is shown as a row");
+    assert.ok(
+      String(failure.desc).includes("读取壁纸文件:boom"),
+      "…naming where it happened and what the error said"
+    );
+    plugin.lastError = null;
+    assert.ok(
+      !tab.getSettingDefinitions().some((d) => d.name === "上次失败"),
+      "and the row disappears once it is dismissed"
+    );
 
     console.log("OBSIDIAN DECLARATIVE SETTINGS TEST PASSED");
     console.log("  every imperative control has a declarative definition (key, type,");

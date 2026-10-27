@@ -77,8 +77,53 @@ async function run() {
   assert.ok(!body.classList.contains("wallvia-glass"), "cleanup removes glass class");
   assert.equal(Object.keys(body.style).length, 0, "cleanup removes all css variables");
 
+  // --- disabled mid-apply: the late run must not repaint -----------------
+  // `stat()` is the first thing apply() waits on. Hold it open, disable the
+  // plugin, then let it resolve: before the guard, the resolved run finished by
+  // re-adding the classes and variables, leaving a wallpaper that survived the
+  // plugin being turned off.
+  let releaseStat;
+  const statGate = new Promise((resolve) => {
+    releaseStat = resolve;
+  });
+  const slowApp = {
+    workspace: {
+      on: (evt) => ({ evt }),
+      onLayoutReady: (cb) => cb(),
+      containerEl: {},
+    },
+    vault: {
+      configDir: ".obsidian",
+      getFiles: () => [],
+      getResourcePath: (p) => "app://local/" + encodeURIComponent(p),
+      on: (evt) => ({ evt }),
+      adapter: {
+        stat: async () => {
+          await statGate;
+          return { type: "file", mtime: 123 };
+        },
+        getResourcePath: (p) => "app://local/" + encodeURIComponent(p),
+      },
+    },
+  };
+  const late = new Plugin(slowApp, { id: "wallvia" });
+  await late.onload();
+  late.settings.image = "Wallpapers/a.png";
+  const pending = late.apply();
+  late.onunload();
+  releaseStat();
+  await pending;
+  assert.ok(
+    !body.classList.contains("wallvia-enabled"),
+    "an apply() that finishes after onunload() does not repaint"
+  );
+  assert.equal(Object.keys(body.style).length, 0, "and leaves no css variables behind");
+
   console.log("OBSIDIAN PLUGIN SMOKE TEST PASSED");
-  console.log("  onload events, apply(), css-change, onunload cleanup, theme wash — verified.");
+  console.log(
+    "  onload events, apply(), css-change, onunload cleanup, theme wash, and the" +
+      "\n  post-unload cancellation guard — verified."
+  );
 }
 
 module.exports = run;

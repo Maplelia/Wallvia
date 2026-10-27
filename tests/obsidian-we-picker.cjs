@@ -46,6 +46,10 @@ async function run() {
   const tmpFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "wallvia-we-")), "preview.png");
   fs.writeFileSync(tmpFile, PNG_BYTES);
 
+  // The default cache folder is the plugin's own: a dot-folder Obsidian never
+  // lists in the file explorer, derived from the vault's config directory.
+  const CACHE = ".obsidian/plugins/wallvia/cache";
+
   const mkdirCalls = [];
   const writes = [];
   const removed = [];
@@ -56,6 +60,7 @@ async function run() {
       containerEl: {},
     },
     vault: {
+      configDir: ".obsidian",
       getFiles: () => [],
       on: (evt) => ({ evt }),
       adapter: {
@@ -68,7 +73,7 @@ async function run() {
           writes.push([target, data]);
         },
         list: async () => ({
-          files: ["Wallpapers/wallvia-we-stale.jpg", "Wallpapers/keep-me.md"],
+          files: [CACHE + "/wallvia-we-stale.jpg", CACHE + "/keep-me.md"],
           folders: [],
         }),
         remove: async (target) => {
@@ -93,7 +98,7 @@ async function run() {
     const weCommand = commands.find((c) => c.id === "pick-wallpaper-engine");
     assert.ok(weCommand, "pick-wallpaper-engine command is registered");
     assert.equal(weCommand.name, "Choose from Wallpaper Engine", "command name");
-    assert.equal(plugin.settings.weCacheDir, "Wallpapers", "default cache dir");
+    assert.equal(plugin.settings.weCacheDir, "", "cache dir defaults to the plugin-private folder");
 
     // --- fit mapping (cover | fill | center) -----------------------------
     plugin.settings.image = "Wallpapers/a.png";
@@ -122,6 +127,21 @@ async function run() {
     assert.equal(legacyBogus.settings.fit, "cover", "unknown fit → cover");
     delete proto.loadData;
 
+    // --- 1.0.x data.json migrates to the private cache -------------------
+    proto.loadData = async () => ({ weCacheDir: "Wallpapers" });
+    removed.length = 0;
+    const migrated = new Plugin(app, { id: "wallvia" });
+    await migrated.onload();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      migrated.settings.weCacheDir,
+      "",
+      "the old default becomes the plugin-private cache folder"
+    );
+    assert.ok(removed.length > 0, "the stills it left in the vault are cleaned up");
+    removed.length = 0; // the copy assertions below count their own removals
+    delete proto.loadData;
+
     // --- copy a Wallpaper Engine preview into the vault ------------------
     plugin.settings.image = "";
     plugin.settings.enabled = false; // picking a wallpaper must turn it back on
@@ -139,13 +159,13 @@ async function run() {
 
     assert.deepEqual(
       mkdirCalls[0],
-      ["Wallpapers", true],
-      "cache dir is created recursively before writing"
+      [CACHE, true],
+      "the private cache folder is created recursively before writing"
     );
     assert.equal(writes.length, 1, "exactly one file is written");
     assert.equal(
       writes[0][0],
-      "Wallpapers/wallvia-we-3536645955.png",
+      CACHE + "/wallvia-we-3536645955.png",
       "file name is wallvia-we-<id>.<ext>"
     );
     assert.ok(writes[0][1] instanceof ArrayBuffer, "writeBinary receives an ArrayBuffer");
@@ -153,10 +173,10 @@ async function run() {
     assert.deepEqual(Buffer.from(writes[0][1]), PNG_BYTES, "bytes are identical");
     assert.deepEqual(
       removed,
-      ["Wallpapers/wallvia-we-stale.jpg"],
+      [CACHE + "/wallvia-we-stale.jpg"],
       "only stale wallvia-we-* files are removed"
     );
-    assert.equal(plugin.settings.image, "Wallpapers/wallvia-we-3536645955.png", "settings updated");
+    assert.equal(plugin.settings.image, CACHE + "/wallvia-we-3536645955.png", "settings updated");
     assert.equal(plugin.settings.enabled, true, "picking a wallpaper re-enables it");
     assert.equal(
       props.get("--wallvia-image").includes("wallvia-we-3536645955.png"),

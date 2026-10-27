@@ -52,7 +52,32 @@ export interface WPSettings {
    * nothing is ever resampled.
    */
   maxImageWidth: number;
-  weCacheDir: string; // vault folder for copied Wallpaper Engine previews
+  /** Vault folder for copied stills; "" = the plugin-private cache folder. */
+  weCacheDir: string;
+  /**
+   * Absolute path of the video file behind the current wallpaper, or "".
+   *
+   * The still image in `image` is the poster; this is the moving picture. It is
+   * an absolute native path because the file lives in the Wallpaper Engine
+   * library, outside the vault — `video-server.ts` is what makes it playable.
+   */
+  videoPath: string;
+  /**
+   * Play a video wallpaper instead of painting one decoded frame of it.
+   *
+   * A video wallpaper used to be flattened to a still because the background was
+   * a CSS `background-image`, which cannot play anything. The layer is a real
+   * `<video>` now, so the frame is demoted to the poster: it is what the screen
+   * shows until the first decoded frame arrives. Off restores the old
+   * one-frame behaviour (and is the answer for anyone who picked a video because
+   * they wanted a still out of it).
+   */
+  videoWallpaper: boolean;
+  /** Start the video muted. Browsers refuse autoplay with sound; the switch is
+   * what turns it on for someone who wants the wallpaper's audio. */
+  videoMuted: boolean;
+  /** Pause the video while the window is not focused (saves decode + battery). */
+  videoPauseUnfocused: boolean;
   /** Draggable button position in px; undefined = the default bottom-right. */
   fabLeft?: number;
   fabTop?: number;
@@ -74,7 +99,11 @@ export const DEFAULTS: WPSettings = {
   hires: true,
   videoFrames: true,
   maxImageWidth: 0,
-  weCacheDir: "Wallpapers",
+  weCacheDir: "",
+  videoPath: "",
+  videoWallpaper: true,
+  videoMuted: true,
+  videoPauseUnfocused: true,
 };
 
 /** Bounds of the "maximum source width" setting, matching the VS Code port. */
@@ -98,7 +127,7 @@ export const FIT_CSS: Record<WPFit, string> = {
  * the proper nouns in them.
  */
 export const LABELS = {
-  enable: "启用 Enabled",
+  enable: "启用壁纸(总开关)",
   image: "背景图片",
   fit: "对齐方式 Fit",
   dim: "压暗 Dim",
@@ -110,6 +139,9 @@ export const LABELS = {
   hires: "场景包取原图",
   videoFrames: "视频抽帧",
   maxImageWidth: "最大图源宽度",
+  videoWallpaper: "视频壁纸播放",
+  videoMuted: "视频静音",
+  videoPauseUnfocused: "失焦时暂停视频",
 };
 
 /**
@@ -118,7 +150,7 @@ export const LABELS = {
  * both now read these.
  */
 export const DESCS = {
-  enable: "在工作区后面显示壁纸。",
+  enable: "在工作区后面显示壁纸。关掉即完全停用:样式变量与视频层都会被撤掉,但选择的壁纸仍保留,重新打开立刻回来。",
   image: "选择 vault 里的本地图片;选择后会复制一份到缓存目录。",
   fit: "图片如何铺满工作区。",
   dim: "遮罩强度,数值越大文字越清晰(0-1)。",
@@ -131,6 +163,11 @@ export const DESCS = {
   videoFrames: "视频壁纸取视频里的一帧当预览;关掉后改用它的方形预览图。已缓存的帧不会被删除。",
   maxImageWidth:
     "取原图 / 视频帧的最大宽度(px);0 = 用最清晰的一级(4K 图约 33MB 显存),视频卡片帧 960。只挑更小的 mipmap 级,不缩放;填大值会让视频卡片帧一起变清晰。",
+  videoWallpaper:
+    "视频壁纸直接播放画面,而不是只画一帧。关掉后退回抽帧的静态图(抽帧本身仍由上面的开关控制)。",
+  videoMuted:
+    "静音播放。浏览器不允许有声音的视频自动播放,想让壁纸出声就得手动点一次画面。",
+  videoPauseUnfocused: "切到别的窗口时暂停视频,回来再继续;省电,也避免后台空转解码。",
 };
 
 /** Fit choices, so the dropdown cannot differ between the two surfaces. */
@@ -199,6 +236,10 @@ export function resetEffects(settings: WPSettings): void {
     hires: settings.hires,
     videoFrames: settings.videoFrames,
     maxImageWidth: settings.maxImageWidth,
+    videoPath: settings.videoPath,
+    videoWallpaper: settings.videoWallpaper,
+    videoMuted: settings.videoMuted,
+    videoPauseUnfocused: settings.videoPauseUnfocused,
   });
 }
 

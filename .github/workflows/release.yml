@@ -46,6 +46,13 @@ jobs:
       - name: Install plugin dependencies
         run: npm install
 
+      # Before the build below, not after: the build overwrites main.js, so a
+      # check that runs later would only prove "the build I just ran equals the
+      # build I just ran". Here it proves the file in the tag was built from
+      # these sources.
+      - name: Committed artifacts must match the sources
+        run: node scripts/verify-artifact.mjs
+
       - name: Build plugin
         run: npm run build
 
@@ -62,6 +69,12 @@ jobs:
           npx --yes @vscode/vsce package --out "wallvia-$version.vsix"
           ls -la ./*.vsix
 
+      - name: The packaged VSIX must contain these sources
+        run: node scripts/verify-artifact.mjs --vsix --strict
+
+      - name: Pin the release assets
+        run: node scripts/checksums.mjs
+
       - name: Generate artifact attestation
         uses: actions/attest@v4
         with:
@@ -69,6 +82,7 @@ jobs:
             main.js
             manifest.json
             styles.css
+            SHA256SUMS.txt
             vscode/*.vsix
 
       - name: Create release
@@ -78,10 +92,10 @@ jobs:
           tag="${GITHUB_REF#refs/tags/}"
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" --clobber \
-              main.js manifest.json styles.css vscode/*.vsix
+              main.js manifest.json styles.css SHA256SUMS.txt vscode/*.vsix
           else
             gh release create "$tag" \
               --title="$tag" \
               --draft \
-              main.js manifest.json styles.css vscode/*.vsix
+              main.js manifest.json styles.css SHA256SUMS.txt vscode/*.vsix
           fi

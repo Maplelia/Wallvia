@@ -87,6 +87,7 @@ interface FsLike {
   promises: {
     readFile(path: string): Promise<BufferLike>;
     writeFile(path: string, data: BufferLike): Promise<void>;
+    rename(oldPath: string, newPath: string): Promise<void>;
     unlink(path: string): Promise<void>;
     stat(path: string): Promise<{ size: number; mtimeMs: number }>;
     open(path: string, flags: string): Promise<FileHandleLike>;
@@ -1029,9 +1030,20 @@ export async function writeVideoFrame(
     await discard(api, file);
     return null;
   }
+  // Write through a temp file + rename: a frame is a JPEG whose header stays
+  // valid when the tail is missing, so a crash mid-write would cache a corrupt
+  // frame that every later run happily paints. Renaming means the cache path
+  // only ever appears with complete bytes behind it.
+  const tmp = file + ".tmp";
   try {
-    await api.fs.promises.writeFile(file, bytes);
+    await api.fs.promises.writeFile(tmp, bytes);
+    await api.fs.promises.rename(tmp, file);
   } catch {
+    try {
+      await api.fs.promises.unlink(tmp);
+    } catch {
+      /* best effort */
+    }
     return null;
   }
   return still;

@@ -8,7 +8,7 @@ Wallpaper Engine wallpapers and a glass interface in **VS Code**, **Obsidian** a
 three platforms sharing one local wallpaper library.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.0.1-blue)
 ![Node](https://img.shields.io/badge/node-%E2%89%A522-3c873a)
 ![Admin](https://img.shields.io/badge/admin-not%20required-3c873a)
 ![App files](https://img.shields.io/badge/Codex%20app%20files-untouched-3c873a)
@@ -47,8 +47,10 @@ All three read the same local wallpaper library (Workshop / My Projects / built-
 | Reads wallpapers already downloaded | Wallpaper Engine does not have to be running — the downloaded library is scanned directly |
 | Full-resolution artwork from a scene | Pulls the native-resolution PNG out of the `scene.pkg` mipmap chain, byte for byte: no re-encoding, no resizing |
 | A frame from a video wallpaper | Takes a real frame out of the video as the still image; all three platforms decode it offscreen in the host's own Chromium — no ffmpeg, no external program |
+| Video wallpapers actually play | Obsidian and VS Code paint a real `<video>` layer behind the workspace, with the decoded frame as its poster, so the first paint is never black. One switch turns it back into a still |
 | Three alignments | Cover (fills, may crop) / Fill (fills, may stretch) / Center (native ratio, centred) |
 | Readability dim | A theme-aware dim layer — near-black on dark themes, near-white on light ones — so nothing ends up crushed or blown out |
+| Fails visibly, not silently | Every swallowed failure has a home: the Obsidian settings page grows a "last failure" row, VS Code raises a warning with **Open output / Retry**, shows a status-bar badge and writes the reason to its output channel |
 
 ## In action
 
@@ -115,8 +117,9 @@ irm https://cdn.jsdelivr.net/gh/Maplelia/Wallvia@main/codex/install.ps1 | iex
 ├── obsidian/      Obsidian plugin source, docs and screenshots
 ├── vscode/        VS Code extension (src/, images/, scripts/)
 ├── codex/         Codex CLI and the CDP injector
-├── tests/         Test suite (mock included, zero dependencies)
-├── scripts/       Maintenance scripts, such as the version bump
+├── tests/         Test suite (mock included, zero dependencies; every file runs unattended)
+├── tools/         Manual tools (need a real window / a real install; not part of the suite)
+├── scripts/       Version bump, checksums, artifact verification
 ├── INSTALL.md     Install notes
 └── CREDITS.md     Credits and third-party sources
 ```
@@ -141,7 +144,7 @@ Current regression result:
 ALL TESTS PASSED
 ```
 
-Coverage: manifest validation, the shared core parameters, wallpaper discovery and ordering, native artwork extraction from `scene.pkg` (mipmap levels and caching included), MP4 container parsing, the video-frame cache, the Obsidian plugin lifecycle and its stylesheet invariants, the VS Code patch and restore, the VS Code real-stylesheet specificity guard, and live CDP injection into a real Chromium.
+Coverage: manifest validation, the shared core parameters, wallpaper discovery and ordering, native artwork extraction from `scene.pkg` (mipmap levels and caching included), MP4 container parsing, the video-frame cache, the video wallpaper layer on both targets (including the loopback media server's Range/token behaviour), the Obsidian plugin lifecycle and its stylesheet invariants, the VS Code patch and restore, the VS Code real-stylesheet specificity guard, and live CDP injection into a real Chromium.
 
 ## License and credits
 

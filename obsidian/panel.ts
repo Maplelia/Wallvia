@@ -49,6 +49,10 @@ const T = {
   we: "从 Wallpaper Engine 选择…",
   remove: "移除",
   reset: "恢复默认效果",
+  video: "播放视频壁纸",
+  videoMuted: "视频静音",
+  videoOn: "视频壁纸 · 播放中",
+  videoOff: "视频壁纸 · 已关闭播放",
 };
 
 /** Set several CSS properties at once (no direct style assignment: lint). */
@@ -296,6 +300,15 @@ export class WallpaperPanel {
       preview.addClass("wallvia-panel-preview-empty");
       preview.setText(T.empty);
     }
+    // The panel shows the poster; say whether the thing behind it is moving.
+    // Without this the only way to tell a playing video from a still is to look
+    // at the workspace and hope.
+    if (this.host.imageUrl && s.videoPath) {
+      panel.createDiv({
+        cls: "wallvia-panel-note",
+        text: s.videoWallpaper ? T.videoOn : T.videoOff,
+      });
+    }
 
     // 3) Choose / replace / remove.
     const actions = panel.createDiv({ cls: "wallvia-panel-actions" });
@@ -315,6 +328,9 @@ export class WallpaperPanel {
       });
       remove.addEventListener("click", () => {
         s.image = "";
+        // Also the video: a `<video>` left behind keeps playing after "移除",
+        // which reads as "the remove button does not work".
+        s.videoPath = "";
         this.commit(true);
       });
     }
@@ -335,6 +351,36 @@ export class WallpaperPanel {
           this.commit(true);
         });
       });
+
+    // Only meaningful while a video wallpaper is actually playing; showing the
+    // row for a still would offer a switch that cannot do anything. Mute lives
+    // here too: the panel's whole point is that the effects are reachable
+    // without opening the settings page, and muting is the one video control a
+    // user reaches for while looking at the picture.
+    if (s.videoPath) {
+      new Setting(panel)
+        .setName(T.video)
+        .setDesc(DESCS.videoWallpaper)
+        .addToggle((t) =>
+          t.setValue(s.videoWallpaper).onChange((v) => {
+            s.videoWallpaper = v;
+            // Re-render: turning playback on or off changes which layer is
+            // visible, and the preview caption follows it.
+            this.commit(true);
+          })
+        );
+      new Setting(panel)
+        .setName(T.videoMuted)
+        .setDesc(DESCS.videoMuted)
+        .addToggle((t) =>
+          t.setValue(s.videoMuted).onChange((v) => {
+            s.videoMuted = v;
+            // No re-render needed: the layer reads the flag on the next apply,
+            // and a rebuild here would close the panel's scroll position.
+            this.commit(false);
+          })
+        );
+    }
 
     this.slider(panel, LABELS.dim, DESCS.dim, s.dim, 0, 1, 0.05, "", (v) => {
       s.dim = v;

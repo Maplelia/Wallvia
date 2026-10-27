@@ -1,8 +1,11 @@
 # tests/capture-window.ps1 — screenshot a window even when it is occluded.
+# Manual tool, not part of the suite (it needs a visible window).
 # Usage: powershell -ExecutionPolicy Bypass -File tests/capture-window.ps1 -Title "Visual Studio Code" -Out shot.png
 param(
   [string]$Title = "Visual Studio Code",
-  [string]$Out = "E:\dsh work\杂项\wallpaper-port\Wallvia\tests\.verify-window.png"
+  # Defaults next to this script: a hard-coded absolute path breaks the moment
+  # the repo moves, which is exactly what happened to the old one.
+  [string]$Out = (Join-Path $PSScriptRoot ".verify-window.png")
 )
 
 Add-Type -AssemblyName System.Drawing

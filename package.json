@@ -1,6 +1,6 @@
 {
   "name": "wallvia",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Bring your Wallpaper Engine everywhere. Monorepo: the Obsidian plugin's sources in obsidian/ (bundled to the root), the VS Code extension in vscode/, the npm CLI in codex/.",
   "license": "MIT",

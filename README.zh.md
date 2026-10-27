@@ -8,7 +8,7 @@
 三个平台，共用一个本机壁纸库。
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.0.1-blue)
 ![Node](https://img.shields.io/badge/node-%E2%89%A522-3c873a)
 ![Admin](https://img.shields.io/badge/admin-not%20required-3c873a)
 ![App files](https://img.shields.io/badge/Codex%20app%20files-untouched-3c873a)
@@ -47,8 +47,10 @@
 | 读本机已下载的壁纸 | 不需要 Wallpaper Engine 正在运行，直接扫已下载的壁纸库 |
 | 场景包取原图 | 从 `scene.pkg` 的 mipmap 链里取出原始分辨率的 PNG，字节原样，不重编码、不缩放 |
 | 视频壁纸抽帧 | 视频壁纸取视频里真实的一帧当静图；三个平台都用宿主自带的 Chromium 离屏解码，不需要 ffmpeg 或任何外部程序 |
+| 视频壁纸真的会播 | Obsidian 与 VS Code 会在工作区后面铺一层真实的 `<video>`，抽帧得到的静图当它的封面，所以首帧之前不会黑屏。一个开关就能退回静态一帧 |
 | 三种对齐方式 | 覆盖（铺满可裁切）/ 填充（填满可变形）/ 居中（原比例居中） |
 | 可读性压暗 | 跟随主题的压暗层，暗色用近黑、亮色用近白，避免压死或过曝 |
+| 失败可见，不静默 | 每个被吞掉的失败都有落点：Obsidian 设置页长出「上次失败」一行；VS Code 弹出带 **打开输出 / 重试** 的警告、状态栏挂角标、原因写进输出面板 |
 
 ## 效果
 
@@ -115,8 +117,9 @@ irm https://cdn.jsdelivr.net/gh/Maplelia/Wallvia@main/codex/install.ps1 | iex
 ├── obsidian/      Obsidian 插件源码、文档与截图
 ├── vscode/        VS Code 扩展（src/、images/、scripts/）
 ├── codex/         Codex CLI 与 CDP 注入器
-├── tests/         测试套件（含 mock，零依赖）
-├── scripts/       版本号等维护脚本
+├── tests/         测试套件（含 mock，零依赖；每个文件都必须无人工介入）
+├── tools/         手动工具（需要真实窗口 / 真实安装目录，不进测试套件）
+├── scripts/       版本号、校验和、产物校验等维护脚本
 ├── INSTALL.md     安装说明
 └── CREDITS.md     致谢与第三方来源
 ```
@@ -141,7 +144,7 @@ npm run lint         # ESLint + Stylelint
 ALL TESTS PASSED
 ```
 
-测试覆盖：配置校验、共享核心参数、壁纸发现与排序、`scene.pkg` 原图提取（含 mipmap 分级与缓存）、MP4 容器解析、视频抽帧缓存、Obsidian 插件生命周期与样式不变量、VS Code 补丁与还原、VS Code 真实样式表权重守卫，以及真实 Chromium 的 CDP 注入。
+测试覆盖：配置校验、共享核心参数、壁纸发现与排序、`scene.pkg` 原图提取（含 mipmap 分级与缓存）、MP4 容器解析、视频抽帧缓存、两个平台的视频壁纸层（含 loopback 媒体源的 Range 与 token 行为）、Obsidian 插件生命周期与样式不变量、VS Code 补丁与还原、VS Code 真实样式表权重守卫，以及真实 Chromium 的 CDP 注入。
 
 ## 许可与致谢
 

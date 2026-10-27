@@ -26,6 +26,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { writeFileAtomic } = require("./atomic-write");
 const { imageSizeOfBuffer } = require("./still-image");
 
 /**
@@ -122,6 +123,15 @@ function readVideoFrame(video, width) {
 }
 
 /**
+ * Frames are written with the shared atomic writer (./atomic-write) for a
+ * reason worth keeping in mind: a frame is a JPEG whose header is valid even
+ * when the tail is missing, and the reader's checks (header parses,
+ * ≥ MIN_FRAME_BYTES) cannot tell a truncated image from a complete one. A crash
+ * mid-write would therefore cache a corrupt frame that paints as garbage on
+ * every later run.
+ */
+
+/**
  * Store a frame the renderer decoded.
  * @param {string} video absolute path of the source video
  * @param {string} base64Jpeg JPEG payload (no `data:` prefix)
@@ -141,7 +151,7 @@ function writeVideoFrame(video, base64Jpeg, width) {
   const size = imageSizeOfBuffer(bytes);
   if (!size || bytes.length < MIN_FRAME_BYTES) return null;
   try {
-    fs.writeFileSync(file, bytes);
+    writeFileAtomic(file, bytes);
   } catch {
     return null;
   }

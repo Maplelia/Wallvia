@@ -7,11 +7,11 @@
 Pick one image as the background of the whole workbench: the editor and the panels turn into translucent frosted glass while the text stays crisp.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.0.1-blue)
 ![VS Code](https://img.shields.io/badge/VS%20Code-%E2%89%A51.80-007ACC)
 ![Dependencies](https://img.shields.io/badge/dependencies-none-3c873a)
 
-English · [中文](README.zh.md)
+English 路 [涓枃](README.zh.md)
 
 </div>
 
@@ -40,7 +40,7 @@ English · [中文](README.zh.md)
 | Feature | Detail |
 |:--|:--|
 | **Pick a Wallpaper Engine wallpaper directly** | A card grid lists the wallpapers **downloaded** on this machine (Workshop + My Projects + built-in), with large 16:9 artwork + a **resolution badge** + a search box; the one in use is marked "current" |
-| **Native artwork, not a square preview** | A scene wallpaper takes its real image from the `scene.pkg` mipmap chain (measured at 3840×2160 / 7680×4320) instead of the 801–1024 square preview; built-in / web projects are scanned for wide images under `materials/` and `images/` |
+| **Native artwork, not a square preview** | A scene wallpaper takes its real image from the `scene.pkg` mipmap chain (measured at 3840脳2160 / 7680脳4320) instead of the 801鈥?024 square preview; built-in / web projects are scanned for wide images under `materials/` and `images/` |
 | **One real frame from a video wallpaper too** | Decoded by the editor's own Chromium (offscreen `<video>` + canvas), with **no ffmpeg install and no dependency at all** |
 | **Four alignments** | **Cover** / **Contain** (the whole image, uncropped, with a margin) / **Fill** / **Center** |
 | **Dim layer** | `dim` keeps the text legible on a busy wallpaper and can **follow the theme's light/dark setting** (near-black on dark, near-white on light) |
@@ -64,7 +64,7 @@ English · [中文](README.zh.md)
 | A custom directory outside Program Files (such as `D:\Microsoft VS Code`) | No (verified writable) |
 | `C:\Program Files\...` | Usually yes |
 
-> ⚠️ **Works on the desktop build on this machine only.** The extension produces the background image by modifying
+> 鈿狅笍 **Works on the desktop build on this machine only.** The extension produces the background image by modifying
 > the `workbench.html` in the installation directory, so installing it in vscode.dev / the web version / Remote-SSH / Dev Containers has no effect either.
 
 ## Installation
@@ -109,31 +109,31 @@ This directory ships a `.vscode/launch.json`; just press <kbd>F5</kbd> in VS Cod
 
 Copy this directory to `%USERPROFILE%\.vscode\extensions\wallvia.wallvia-<version>\` and restart.
 
-> After installing, **reload the window once** (command palette → `Developer: Reload Window`): the
+> After installing, **reload the window once** (command palette 鈫?`Developer: Reload Window`): the
 > extension writes the patch on first activation, and `workbench.html` is read only once, at window startup.
 
 ## Usage
 
-In the command palette (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>) type **`wallvia`** — every command starts with `Wallvia:`, so searching the brand name always hits; searching `wallpaper engine` also finds the picker entry.
+In the command palette (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>) type **`wallvia`** 鈥?every command starts with `Wallvia:`, so searching the brand name always hits; searching `wallpaper engine` also finds the picker entry.
 
 | Command | What it does |
 |:--|:--|
-| **Wallvia: Choose Wallpaper Engine Wallpaper…** | Opens the card grid picker (**preferred**) |
-| **Wallvia: Choose Image File…** | Picks a local still image (JPG / PNG / BMP) and applies it |
+| **Wallvia: Choose Wallpaper Engine Wallpaper鈥?* | Opens the card grid picker (**preferred**) |
+| **Wallvia: Choose Image File鈥?* | Picks a local still image (JPG / PNG / BMP) and applies it |
 | **Wallvia: Open Settings Panel** | The graphical panel: effect sliders + four optional toggles + source artwork width cap |
-| **Wallvia: Toggle Glass Effect** | Switches `glass` ↔ `fade` |
+| **Wallvia: Toggle Glass Effect** | Switches `glass` 鈫?`fade` |
 | **Wallvia: Remove Wallpaper** | Removes the wallpaper (and deletes the copied image) |
 | **Wallvia: Show Status** | Prints the status JSON (for troubleshooting, including the current source artwork and its resolution) |
 | **Wallvia: Restore Original workbench.html** | Restores the installation directory from the backup and deletes the generated CSS / script / stamp |
 
-> Historical note: in 0.1.x the commands were named `Wallpaper: Pick Image…` and so on, and sat under the
+> Historical note: in 0.1.x the commands were named `Wallpaper: Pick Image鈥 and so on, and sat under the
 > `Glass Wallpaper` category; since 0.2.0 they all use the `Wallvia:` prefix.
 
 ### Wallpaper Engine wallpaper picker
 
 <img src="images/vscode-picker.jpg" alt="Wallpaper Engine wallpaper picker" width="100%">
 
-<sub>The Wallpaper Engine picker: a card grid with resolution badges (in the screenshot, a 3840×2160 scene and 3200×1756 / 2560×1440 / 3830×2160 video frames); "current" is the one in effect, and clicking a card applies it.</sub>
+<sub>The Wallpaper Engine picker: a card grid with resolution badges (in the screenshot, a 3840脳2160 scene and 3200脳1756 / 2560脳1440 / 3830脳2160 video frames); "current" is the one in effect, and clicking a card applies it.</sub>
 
 ## Settings reference
 
@@ -144,7 +144,7 @@ In the command palette (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>) type **`w
 | `wallvia.glass` | 0-100 | `55` | Transparency (%). At 100 the editor background is at its faintest, at 0 it is close to opaque |
 | `wallvia.mode` | `glass` \| `fade` | `glass` | `fade` keeps only a fainter wash layer; the most stable option |
 | `wallvia.fit` | `cover` \| `contain` \| `fill` \| `center` | `cover` | **cover** fills the screen (may crop the edges) / **contain** keeps the whole image uncropped (with dark bars) / **fill** stretches / **center** keeps the native size |
-| `wallvia.hires` | boolean | `true` | Takes the native-resolution artwork from the scene package; turn it off to use only the 801–1024 preview image |
+| `wallvia.hires` | boolean | `true` | Takes the native-resolution artwork from the scene package; turn it off to use only the 801鈥?024 preview image |
 | `wallvia.videoFrames` | boolean | `true` | Grabs one frame from a video wallpaper as the thumbnail / background (decoded by Chromium, no ffmpeg needed) |
 | `wallvia.liveApply` | boolean | `true` | Changes apply live; when off, a change needs a manual window reload |
 | `wallvia.themeAware` | boolean | `true` | The dim layer color follows the theme's light/dark setting |
@@ -185,21 +185,21 @@ The wallpaper is **never** painted on the sidebar's or a panel's own `background
 
 <img src="images/vscode-surfaces.jpg" alt="The wallpaper is continuous across the sidebar / editor / terminal panel" width="100%">
 
-<sub>With the sidebar, the editor and the terminal panel open at the same time, the wallpaper is **continuous** across the four areas — the sidebar is not an opaque card.</sub>
+<sub>With the sidebar, the editor and the terminal panel open at the same time, the wallpaper is **continuous** across the four areas 鈥?the sidebar is not an opaque card.</sub>
 
 ### Three details that must be right (all verified in a real workbench)
 
 | Detail | What getting it wrong causes |
 |:--|:--|
-| `checksums` must be the **base64 of the sha256, with the `=` padding removed** (43 characters) | Writing hex → *"Your Code installation appears to be corrupt"* on every launch |
+| `checksums` must be the **base64 of the sha256, with the `=` padding removed** (43 characters) | Writing hex 鈫?*"Your Code installation appears to be corrupt"* on every launch |
 | The image URI must be **percent-encoded**, using `vscode.Uri.file(p).with({scheme:'vscode-file',authority:'vscode-app'})` | When the path contains a space or Chinese characters (extremely common on Windows) the renderer refuses to load it |
-| The wallpaper layers use **positive 0 / 1 / 2 z-index values**, never negative | A negative `z-index` is clipped away by `.monaco-workbench`'s own stacking context → **the wallpaper does not show at all** |
+| The wallpaper layers use **positive 0 / 1 / 2 z-index values**, never negative | A negative `z-index` is clipped away by `.monaco-workbench`'s own stacking context 鈫?**the wallpaper does not show at all** |
 
 ### Two "clearing" mechanisms (both are required)
 
 Surfaces inside the workbench get their color in two ways, and each has to be dealt with separately:
 
-1. **Selectors with `!important`** — override them with a more specific rule that is also `!important`.
+1. **Selectors with `!important`** 鈥?override them with a more specific rule that is also `!important`.
    Always copy VS Code's real class chain verbatim, for example the floating cards of the modern UI (1.140+):
 
    ```css
@@ -207,14 +207,14 @@ Surfaces inside the workbench get their color in two ways, and each has to be de
    ```
 
    That is a specificity of **(0,4,0)**. Written as `html body .monaco-workbench .part.sidebar` it is only (0,3,2) and
-   **loses** — the symptom being "the wallpaper fills the whole window, but the sidebar is still an opaque card".
+   **loses** 鈥?the symptom being "the wallpaper fills the whole window, but the sidebar is still an opaque card".
 
-2. **Theme variables** — a great many surfaces are colored through theme variables (`--vscode-tab-inactiveBackground`
+2. **Theme variables** 鈥?a great many surfaces are colored through theme variables (`--vscode-tab-inactiveBackground`
    and the like); setting those variables to `transparent` on `.monaco-workbench` saves you from writing a rule per surface:
 
    ```css
    html body .monaco-workbench { --vscode-editor-background: transparent; --vscode-sideBar-background: transparent;
-                                 --vscode-surface-background: transparent; --modern-ui-shell-background: transparent; … }
+                                 --vscode-surface-background: transparent; --modern-ui-shell-background: transparent; 鈥?}
    ```
 
 `tests/vscode-css-weight.cjs` parses the **`workbench.desktop.main.css` from the real installation directory** and
@@ -227,12 +227,11 @@ has gone opaque again.
 `workbench.html` is read only once, at window startup, so early versions reloaded the whole window for every settings
 change. `applyPatch()` now also writes:
 
-- `wallvia-live.js` — a small script that runs `fetch('./wallvia-stamp.txt')` every 2 seconds;
-- `wallvia-stamp.txt` — the CSS mtime stamp.
+- `wallvia-live.js` 鈥?a small script that runs `fetch('./wallvia-stamp.txt')` every 2 seconds;
+- `wallvia-stamp.txt` 鈥?the CSS mtime stamp.
 
 When the stamp changes, the `<link href>` is **rewritten in place**, the browser re-reads the stylesheet and nothing else in the window moves at all.
-(The workbench CSP has `require-trusted-types-for 'script'`, so inserting a `<script>` dynamically is not an option —
-only `fetch` + changing `href`; `connect-src 'self'` allows that fetch.)
+(The workbench CSP has `require-trusted-types-for 'script'`, so inserting a `<script>` dynamically is not an option 鈥?only `fetch` + changing `href`; `connect-src 'self'` allows that fetch.)
 
 Live apply can only *swap* a `<link>` that is already in the document, which is why one case genuinely needs a reload:
 right after a VS Code update the patched `workbench.html` was written **after** the window had already loaded the pristine
@@ -253,14 +252,14 @@ Wallvia: Restore Original workbench.html
 ```
 
 It copies the backup back, deletes `wallvia-bg.css`, `wallvia-live.js` and `wallvia-stamp.txt`, and recomputes
-`product.json` → `checksums`.
+`product.json` 鈫?`checksums`.
 
 The manual steps (equivalent):
 
 1. Overwrite `workbench.html` with `workbench.html.wallvia.bak`;
-2. Delete the `<!-- wallvia:start -->` … `<!-- wallvia:end -->` marked block;
+2. Delete the `<!-- wallvia:start -->` 鈥?`<!-- wallvia:end -->` marked block;
 3. Delete `wallvia-bg.css` / `wallvia-live.js` / `wallvia-stamp.txt` from the same directory;
-4. Recompute `product.json` → `checksums["vs/code/electron-browser/workbench/workbench.html"]`;
+4. Recompute `product.json` 鈫?`checksums["vs/code/electron-browser/workbench/workbench.html"]`;
 5. Uninstall the extension (the cache directories `globalStorage/wallvia.wallvia/` and `%TEMP%\wallvia-stills\` can be deleted along with it).
 
 ## Verification
@@ -284,8 +283,8 @@ node tests/vscode-css-weight.cjs   # validate the surface-clearing specificity a
 ## Known limitations
 
 - Desktop only; not applicable to Remote / Web.
-- **The Wallpaper Engine picker is Windows desktop only**: it is located through a running WE process → the Steam
-  registry → common installation directories (you can also force it with the `WE_CONFIG` environment variable pointing
+- **The Wallpaper Engine picker is Windows desktop only**: it is located through a running WE process 鈫?the Steam
+  registry 鈫?common installation directories (you can also force it with the `WE_CONFIG` environment variable pointing
   at `config.json`).
 - **Animated content does not run**: VS Code can only paint a static background. A scene wallpaper contributes the
   native artwork inside the package and a video wallpaper a single frame; the DXT/TGA textures of the built-in default
@@ -304,24 +303,24 @@ node tests/vscode-css-weight.cjs   # validate the surface-clearing specificity a
   inactive.
 - A 4K source artwork takes about 33 MB of VRAM once decoded; if that matters, cap it at 1920/2560 with
   `wallvia.maxImageWidth`.
-- Modifying the installation directory is a hack by nature — assess the risk yourself; the extension makes the
+- Modifying the installation directory is a hack by nature 鈥?assess the risk yourself; the extension makes the
   smallest change it can and keeps a backup.
 
 ## Repository layout
 
 ```
 .
-├── package.json             # command and settings declarations
-├── src/extension.js         # the extension itself: patching / CSS generation / picker and settings panel (plain CJS, no build)
-├── src/wallpaper-engine.js  # Wallpaper Engine discovery + enumeration of downloaded wallpapers
-├── src/still-image.js       # picks the most suitable still image out of the scene.pkg .tex files / loose project images
-├── src/video-frame.js       # video-frame cache: the cache key, width policy, bad payload validation (shares one directory with Obsidian)
-├── src/mp4.js               # pure-byte parsing of the MP4 tkhd to read the video's own resolution
-├── scripts/verify.js        # pre-release consistency check (called by vsce's prepublish)
-├── images/                  # README screenshots
-├── LICENSE
-├── README.md
-└── README.zh.md
+鈹溾攢鈹€ package.json             # command and settings declarations
+鈹溾攢鈹€ src/extension.js         # the extension itself: patching / CSS generation / picker and settings panel (plain CJS, no build)
+鈹溾攢鈹€ src/wallpaper-engine.js  # Wallpaper Engine discovery + enumeration of downloaded wallpapers
+鈹溾攢鈹€ src/still-image.js       # picks the most suitable still image out of the scene.pkg .tex files / loose project images
+鈹溾攢鈹€ src/video-frame.js       # video-frame cache: the cache key, width policy, bad payload validation (shares one directory with Obsidian)
+鈹溾攢鈹€ src/mp4.js               # pure-byte parsing of the MP4 tkhd to read the video's own resolution
+鈹溾攢鈹€ scripts/verify.js        # pre-release consistency check (called by vsce's prepublish)
+鈹溾攢鈹€ images/                  # README screenshots
+鈹溾攢鈹€ LICENSE
+鈹溾攢鈹€ README.md
+鈹斺攢鈹€ README.zh.md
 ```
 
 Generated inside the VS Code installation directory at runtime (deleted on uninstall / restore):
@@ -340,4 +339,4 @@ The CSS selectors and platform behavior were informed by community background ex
 [KatsuteDev/Background](https://github.com/KatsuteDev/Background).
 The glass-wallpaper idea comes from an upstream wallpaper plugin under the MIT license.
 
-[MIT](LICENSE) © 2026 Wallvia contributors
+[MIT](LICENSE) 漏 2026 Wallvia contributors

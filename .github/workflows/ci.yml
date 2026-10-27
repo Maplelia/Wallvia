@@ -1,0 +1,45 @@
+name: CI
+
+# The release workflow only builds and packages; this one actually runs the
+# suite, so a broken test is caught on a push instead of on the tag that cannot
+# be taken back.
+#
+# windows-latest on purpose: the suite's real-machine checks (Wallpaper Engine
+# discovery, the CSS specificity audit against an installed VS Code, the
+# Edge/Chrome frame decode) are Windows-shaped, and the project only supports
+# Windows anyway. Every one of them prints SKIPPED when the prerequisite is
+# missing, so a bare runner stays green for the right reason.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      CI: "1" # a skipped guard is a failure here, not a pass
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install
+        run: npm install
+
+      - name: Committed artifacts must match the sources
+        run: node scripts/verify-artifact.mjs
+
+      - name: Type check
+        run: npx tsc -p obsidian/tsconfig.json --noEmit --skipLibCheck
+
+      - name: Test
+        run: npm test
+
+      - name: Lint
+        run: npm run lint

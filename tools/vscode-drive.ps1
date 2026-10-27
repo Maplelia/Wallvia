@@ -1,4 +1,5 @@
 # tests/vscode-drive.ps1 — focus the VS Code window, send keys, then capture it.
+# Manual tool, not part of the suite (it drives a real window).
 # Focus, keystrokes and the screenshot all happen in this one process: a
 # separate pwsh call would lose the foreground again before SendKeys runs.
 #
@@ -9,7 +10,7 @@ param(
   [string[]]$Keys = @(),
   [int]$WaitSeconds = 0,
   [int]$KeyDelayMs = 900,
-  [string]$Out = "E:\dsh work\杂项\wallpaper-port\Wallvia\tests\.state.png"
+  [string]$Out = (Join-Path $PSScriptRoot ".state.png")
 )
 
 Add-Type -AssemblyName System.Windows.Forms

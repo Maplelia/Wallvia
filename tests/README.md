@@ -10,6 +10,7 @@ node tests/run-all.cjs        # 全部（在仓库根目录 Wallvia/ 下运行�
 单项:
 
 ```powershell
+node tests/artifact-consistency.cjs # 入库的 main.js / 版本三件套 / 已打包 VSIX 是否还等于源码
 node tests/shared-core.mjs    # 平台无关核心:状态/几何/通透度
 node tests/codex-modules.mjs  # Codex:WE 配置解析、源缓存、注入 CSS
 node tests/obsidian-smoke.cjs # Obsidian 插件端到端(mock API)
@@ -21,6 +22,7 @@ node tests/we-video-frame.cjs # 视频帧缓存:源识别 + size/mtime 缓存键
 node tests/we-level-cap.cjs   # 最大图源宽度:按宽度选 mipmap 级(不缩放)+ 缓存键带 cap
 node tests/obsidian-styles.cjs # Obsidian 样式表不变量(每面板一层填充 / 预览显示整图)
 node tests/vscode-smoke.cjs   # VS Code 扩展补丁逻辑(假安装目录)
+node tests/vscode-atomic-write.cjs # 原子写入的失败路径:写一半/重命名一直被拒/瞬时占用
 node tests/vscode-video-frame.cjs # VS Code 侧视频帧缓存(与 Obsidian 共享临时目录与键)
 node tests/vscode-video-decode.cjs # 真 Chromium + 真 WE 视频:验证抽帧函数本身
 node tests/vscode-css-weight.cjs # 用真实 VS Code 样式表校验改写权重的选择器
@@ -32,6 +34,8 @@ node tests/cdp-live.mjs       # 真实 Chromium 端到端注入(无浏览器则 
 | 测试 | 验证点 |
 |---|---|
 | `validate-json.cjs` | 所有交付的 JSON(manifest/package/tsconfig/launch)可解析 |
+| `artifact-consistency.cjs` | 用与发布**完全相同**的构建选项把 `obsidian/` 重打一遍,和入库的 `main.js` **逐字节**比;`manifest.json` / `package.json` / `versions.json` / `vscode/package.json` 版本必须同一;给了 `--vsix` 时再解开 VSIX(自带零依赖 ZIP 读取 + CRC32 校验),逐字节比 `extension/src/*.js` 与 `vscode/src/*.js`。没装 esbuild 时明确 SKIP(**不是通过**),`CI=1` 下直接失败 |
+| `vscode-atomic-write.cjs` | `atomic-write.js` 的失败路径,而不是成功路径:写到一半抛 `ENOSPC` 时**旧文件不变**且不留 `.tmp`;重命名连续失败 4 次才报错(重试次数也是断言);瞬时占用两次后重试成功并发布新字节;权限位保留(POSIX);连续写两次不残留 |
 | `shared-core.mjs` | 状态默认/边界钳制(含 NaN)、`data:` URL 校验、表面通透度公式与**方向**、fit 几何 |
 | `codex-modules.mjs` | WE `config.json` 解析、`scene.pkg` → `preview.jpg`、mtime-size token、**源缓存(未变不重编码)**、注入 CSS(dim 钳制、`data:` 内联、主题分支、不使用本版本缺失的变量)、IIFE 幂等版本守卫 |
 | `obsidian-smoke.cjs` | 载入 esbuild 产物(`.default` 解包)、`onload` 注册 3 个事件、无图不启用、设图后加类并写 CSS 变量、`css-change` 可重入、`onunload` 清空 |
@@ -42,8 +46,10 @@ node tests/cdp-live.mjs       # 真实 Chromium 端到端注入(无浏览器则 
 | `vscode-video-frame.cjs` | VS Code 侧的帧缓存(移植自 `we-video-frame.cjs`):卡片宽 960(**可被 `maxImageWidth` 提高**) / 背景按视频自身宽度且上限 2560 的两套宽度策略、**宽度进缓存键**(两种宽度互不覆盖)、键含 size+mtime、空载荷与非图片载荷不入库、**只有文件头的 23 字节残废 JPEG 被拒**(它在解析上"合法",因此必须按体积拦)、**磁盘上被截断的缓存帧会被删除而不是端出去**、`tkhd` 尺寸读取、以及**测试帧绝不落进真实缓存目录**(`WALLVIA_STILLS_DIR` 覆盖) |
 | `vscode-video-decode.cjs` | **真 Chromium + 本机真实 WE 视频**:从 `extension.js` 里按括号配平抽出**实际发布的** `decodeFrame`,连**选择器页面自己的 CSP** 一起搬进探针页,对一个真实 4K 视频跑一遍,断言拿到的是 **960 宽的 16:9 JPEG(实测 64 KB)**;再跑一遍**去掉 `media-src`** 的同款页面,断言返回 `null`——那正是"5 张视频卡片全部停在 `…`"的真凶(CSP 缺 `media-src` 时 `<video>` 根本加载不了),所以这条回归被钉死。没浏览器或没 WE 视频时 `SKIPPED` |
 | `vscode-css-weight.cjs` | 解析**真实 VS Code 安装目录**里的 `workbench.desktop.main.css`:逐条找出「给 sidebar/panel/auxiliarybar/editor/titlebar/statusbar/activitybar 等结构表面上色」的规则,要求每条都被 Wallvia 的两套机制之一盖住——同权重更强的 `!important` 清底,或把该规则使用的主题变量置为 `transparent`;并手工钉死 1.140 浮动卡片规则 `.monaco-workbench.floating-panels .part.sidebar`(0,4,0) 必须被 (0,4,2) 的覆盖链压过。没装 VS Code 时打印 `SKIPPED` 并以 0 退出 |
-| `png-pkg-fixture.cjs` | 共享夹具(不是测试):用真 CRC/IDAT 造出合法 PNG,以及 PKGV0022 容器 + 含 mipmap 的 `.tex` 条目,供 Obsidian 与 VS Code 两侧的场景包测试复用 |
-| `mp4-size.cjs` | 纯字节解析 MP4/MOV:`tkhd` v0/v1(16.16 定点)、跳过 0 尺寸音轨、`moov` 在头或在尾、**`mdat` 里伪 `tkhd` 不得胜出**(真机曾把 3840×2160 读成 30307×13873)、超限尺寸拒绝、截断与无 `moov` 返回 `null`;本机装了 WE 时再对真实视频逐个交叉验证 |
+| `obsidian-video.cjs` | **视频壁纸**端到端:loopback 媒体源的 token 闸门(无 token 403、别的路径 404)、整段 200 逐字节一致、`Range`/206(中段、开口、后缀)、越界 416、HEAD 无体、`no-store`,以及 `<video>` 层(封面用抽帧、muted/loop、fit、同一 src 不重载、`destroy()` 真的释放解码器)、开关关闭 / 空 `videoPath` / `onunload()` 三条拆除路径、**清掉静态图后视频必须一起停**(否则壁纸关了它还在播)、**没有封面就不启动**(残留的 `videoPath` 不会留下黑屏首帧),和「文件不存在要记进 `lastError`」 |
+| `vscode-video.cjs` | VS Code 侧的同一特性:静态图**不注入** `<video>`;视频注入**恰好一个**且带 `muted loop autoplay playsinline preload="auto"`、`poster`(抽帧图)、`tabindex="-1"`;**在 `<body>` 里、绝不在 `<head>`**(`<head>` 里的 `<div>` 会让解析器提前闭合 head,视频层跑到文档外);独立标记对 `wallvia:layer:start/end`;css 随之出现/消失;驱动器搭在 `wallvia-live.js` 里并设 `wallvia-video-on`(第一条实现漏了,导致静态图与视频重复合成);`wallvia-stamp.txt` 是 `<css 戳>\n<video url>\n<muted\|sound>\n<pause\|keep>\n`,且**样式表脚本只读第一行**(整份 `trim()` 会把换行塞进 URL,让即时生效静默失效);`clear` 把四样一起撤掉;驱动器里没有 `import`/`require`、没有跨源 fetch |
+| `master-switch.cjs` | **总开关**两端一致:关掉后 VS Code 的两段标记与三个生成文件全部消失、Obsidian 的 class 与**所有 CSS 变量**清空(含视频层)、选择的壁纸/视频路径仍保留;重新打开立刻恢复同一张壁纸,不需要重挑。这条测试抓到的真实缺陷:关闭后 `--wallvia-image` 仍被写入(变量残留,任何读它的主题都会继续画壁纸) |
+| `png-pkg-fixture.cjs` | 共享夹具(不是测试):用真 CRC/IDAT 造出合法 PNG,以及 PKGV0022 容器 + 含 mipmap 的 `.tex` 条目,供 Obsidian 与 VS Code 两侧的场景包测试复用 || `mp4-size.cjs` | 纯字节解析 MP4/MOV:`tkhd` v0/v1(16.16 定点)、跳过 0 尺寸音轨、`moov` 在头或在尾、**`mdat` 里伪 `tkhd` 不得胜出**(真机曾把 3840×2160 读成 30307×13873)、超限尺寸拒绝、截断与无 `moov` 返回 `null`;本机装了 WE 时再对真实视频逐个交叉验证 |
 | `we-folder-still.cjs` | 解包项目(无 `scene.pkg`)的缩略图选取:16:9 素材胜过方形素材、`preview.jpg` 永不入选、过宽 logo 不得压过真正的壁纸、扫描只深入一层、包里没有可用 PNG 时回退到项目散图 |
 | `we-video-frame.cjs` | 视频帧缓存:只有 `project.json` 的 `file` 是视频扩展名时才算视频(`scene.json` 不算)、帧字节原样读回、缓存键含 **size+mtime**(工坊项更新后自动失效)、空载荷不入库 |
 | `we-level-cap.cjs` | 「最大图源宽度」按宽度**选 mipmap 级**(3840 链上 cap=1920 → 取 1920、cap=500 → 取 960、cap=7680 → 回退最大级)、选中字节**逐字节原样**、`cap=0` 与 `cap=1920` 走不同缓存条目、视频帧缓存键也带 cap |
@@ -53,10 +59,39 @@ node tests/cdp-live.mjs       # 真实 Chromium 端到端注入(无浏览器则 
 `SKIPPED` 并以 0 退出,所以套件在无浏览器的机器上仍然全绿。它使用独立的
 `--user-data-dir` 与无头模式,不影响你正在用的浏览器。
 
-## mock 说明
+## 这里只有测试；手动工具在 `tools/`
 
+`run-all.cjs` 覆盖的每一个文件都必须是**无人工介入**的。
+三个需要真实窗口 / 真实安装目录的脚本因此住在 `tools/`，不在本目录、也不进套件：
+
+| 脚本 | 作用 |
+|---|---|
+| `tools/deploy-live.cjs` | 用扩展自己的 `applyPatch()` 往**真实** VS Code 安装目录打一次补丁。安装目录、用户数据目录全部**自动发现**（`WALLVIA_VSCODE_APP` 可覆盖），不再硬编码某个版本目录 —— 旧版写死 `...\07f806f999\`，VS Code 一升级就对着不存在的目录报成功 |
+| `tools/capture-window.ps1` | 抓一个可能被遮挡的窗口截图 |
+| `tools/vscode-drive.ps1` | 聚焦 VS Code 窗口 → 发按键 → 截图（同一进程内完成，否则会丢前台） |
+
+## mock 说明
 `tests/mocks/` 是仅供测试的假 `obsidian` / `vscode` 模块,
 由 `tests/mock-loader.cjs` 通过 `Module._load` 钩子按需注入,
 **不会**写进插件目录的 `node_modules`,也不会随插件交付。
 其中的 `vscode.Uri` 会像真实实现一样做百分号编码,以便测试覆盖
 "路径含空格/中文" 这类真实故障。
+
+## 只有一条测试需要依赖
+
+`artifact-consistency.cjs` 要重打一次包,所以需要 `npm install` 装上 esbuild。
+没有 `node_modules` 时它打印 `SKIPPED (needs \`npm install\` for esbuild; not a pass)`
+并以 0 退出——**这是"没验"而不是"验过了"**,所以 `CI=1` 下同一个条件直接失败。
+其余测试仍然零依赖。
+
+## 后补的行为断言（生命周期与失败路径）
+
+这一轮修的四类"静默失败"各自留下了断言,不是只改了实现:
+
+| 测试 | 新增覆盖 |
+|---|---|
+| `obsidian-smoke.cjs` | `onunload()` 之后才结束的 `apply()` **不再重画**:测试把 `stat()` 挂起、禁用插件、再放行,断言 `document.body` 上不留 class/CSS 变量(旧实现会在这一步把壁纸加回来) |
+| `obsidian-we-picker.cjs` | 1.0.x 的 `weCacheDir: "Wallpapers"` 启动时迁移成插件私有缓存目录,并清掉旧目录里本插件写过的 `wallvia-we-*` |
+| `obsidian-we-picker.cjs` / `obsidian-scene-pkg.cjs` | 默认缓存路径变成 `.obsidian/plugins/wallvia/cache/…`(目录由 `vault.configDir` 推导,不是硬编码的 `.obsidian`) |
+| `obsidian-settings-declarative.cjs` | 记进 `lastError` 的失败会在设置页变成"上次失败"一行(含位置与错误原文),点"忽略"后消失 |
+| `vscode-smoke.cjs` | `.bak` 跟随**当前**版本目录刷新:另一个工具写进 `workbench.html` 的改动会被 `restore` 保留(旧实现只备份一次,`restore` 会用过期基线把它抹掉);卸载后 `deactivate()` 自己还原;自动重打失败会弹出带原因与"打开输出/重试"的警告 |

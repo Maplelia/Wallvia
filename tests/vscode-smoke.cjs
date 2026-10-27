@@ -162,6 +162,56 @@ async function run() {
   assert.ok(fs.existsSync(bak), "backup created");
   assert.ok(!fs.readFileSync(bak, "utf8").includes("wallvia:start"), "backup is pristine");
 
+  // 3b) the backup follows the *current* install tree, not the first one ever.
+  // Append a line that no Wallvia ever wrote (another tool's edit would land
+  // like this), then re-apply: the baseline must now contain it, or `restore`
+  // would silently drop someone else's change.
+  const foreign = '\n<!-- patched by another tool -->\n';
+  fs.writeFileSync(WB, fs.readFileSync(WB, "utf8").replace("</body>", foreign + "</body>"));
+  await setCmd();
+  const refreshedBak = fs.readFileSync(bak, "utf8");
+  assert.ok(
+    refreshedBak.includes("patched by another tool"),
+    "the backup is refreshed from the current workbench.html"
+  );
+  assert.ok(!refreshedBak.includes("wallvia:start"), "…and still contains none of our marker");
+  await ext.__internals.restoreWorkbench({ quiet: true });
+  assert.ok(
+    fs.readFileSync(WB, "utf8").includes("patched by another tool"),
+    "restore keeps the other tool's edit instead of reverting to a stale baseline"
+  );
+
+  // 3c) an uninstalled extension cleans up after itself: deactivate() runs while
+  // the extension folder is already gone, and that is the one signal that
+  // separates "being uninstalled" from "being reloaded".
+  await setCmd();
+  assert.ok(fs.readFileSync(WB, "utf8").includes("wallvia:start"), "patched again");
+  const extDir = path.join(ROOT, "installed-extension");
+  fs.mkdirSync(extDir, { recursive: true });
+  const oldPath = ctx.extensionPath;
+  ctx.extensionPath = extDir;
+  fs.rmSync(extDir, { recursive: true, force: true });
+  await ext.__internals.deactivate();
+  ctx.extensionPath = oldPath;
+  assert.ok(
+    !fs.readFileSync(WB, "utf8").includes("wallvia:start"),
+    "deactivate() after an uninstall removes the patch"
+  );
+  assert.ok(!fs.existsSync(cssPath), "…and the generated stylesheet");
+
+  // 3d) a failed patch is reported, not swallowed into the extension-host log.
+  global.__MOCK_MESSAGES__.length = 0;
+  await ext.__internals.reportPatchFailure(new Error("EACCES: permission denied"), "test");
+  const warned = global.__MOCK_MESSAGES__.some(
+    (m) =>
+      Array.isArray(m) &&
+      m[0] === "warn" &&
+      String(m[1]).includes("EACCES") &&
+      String(m[1]).includes("管理员权限")
+  );
+  assert.ok(warned, "the failure surfaces a warning naming the cause and the fix");
+  await ext.__internals.applyPatch();
+
   // 4) toggling keeps the one-window glass architecture
   await vscode.commands.__commands["wallvia.toggleGlass"]();
   const toggledCss = fs.readFileSync(cssPath, "utf8");
@@ -314,9 +364,18 @@ async function run() {
   assert.ok(fs.existsSync(STAMP), "the stamp file tells the script when to swap");
   assert.ok(/fetch\('\.\/wallvia-stamp\.txt'/.test(fs.readFileSync(LIVE, "utf8")), "the script polls the stamp");
   assert.equal(
-    fs.readFileSync(STAMP, "utf8").trim(),
+    // Line 1 only: the file also carries the video url and the two element-state
+    // switches the video driver reads. Line 1 is still the stylesheet stamp.
+    fs.readFileSync(STAMP, "utf8").split("\n")[0].trim(),
     String(Math.floor(fs.statSync(cssPath).mtimeMs)),
     "the stamp matches the stylesheet's mtime"
+  );
+  // The live script must read that first line, not the whole body: `trim()` on a
+  // two-line stamp embeds a newline in the stylesheet URL and silently breaks
+  // every live effect change.
+  assert.ok(
+    /split\('\\n'\)\[0\]/.test(fs.readFileSync(LIVE, "utf8")),
+    "the live script takes the first line of the stamp, not the whole body"
   );
 
   // 8d) the theme decides the wash colour, and the image URL is versioned so

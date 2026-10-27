@@ -11,9 +11,25 @@ const { install } = require("./mock-loader.cjs");
 install();
 
 const assert = require("node:assert");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const { installDom, oneByClass, byClass } = require("./mocks/obsidian/dom.js");
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/**
+ * A real file outside the vault, so the video layer actually starts.
+ *
+ * A made-up path would exercise only the failure branch (and print its error on
+ * every run), which is the opposite of what these assertions are about.
+ */
+function makeVideoFile() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wallvia-panel-video-"));
+  const file = path.join(dir, "a.mp4");
+  fs.writeFileSync(file, Buffer.alloc(2048, 3));
+  return { file, dir };
+}
 
 /** Setting rows rendered into a container, in order. */
 function rows(container) {
@@ -36,7 +52,7 @@ const SAVED = {
 };
 
 const PANEL_ROWS = [
-  "启用 Enabled",
+  "启用壁纸(总开关)",
   "对齐方式 Fit",
   "压暗 Dim",
   "通透 Glass",
@@ -213,7 +229,7 @@ async function run() {
 
   // --- Enabled toggle ---------------------------------------------------
   rows(panel)
-    .find((s) => s.name.startsWith("启用 Enabled"))
+    .find((s) => s.name.startsWith("启用壁纸(总开关)"))
     .control("toggle")
     .fire(false);
   await tick();
@@ -276,7 +292,7 @@ async function run() {
   tab.display();
   obsidian.Platform.isDesktop = true;
   const SHARED = [
-    "启用 Enabled",
+    "启用壁纸(总开关)",
     "对齐方式 Fit",
     "压暗 Dim",
     "通透 Glass",
@@ -321,6 +337,53 @@ async function run() {
   const tabReset = rows(tab.containerEl).find((s) => s.name === "恢复默认效果");
   assert.ok(tabReset, "the settings page offers the reset button");
   assert.equal(tabReset.control("button").text, "恢复默认", "its button is labelled 恢复默认");
+
+  // --- D2: the video controls appear only for a video wallpaper ----------
+  // A row for a still would offer a switch that cannot do anything, so the panel
+  // hides the whole video block until `videoPath` says there is a video.
+  assert.ok(
+    !oneByClass(body, "wallvia-panel-note"),
+    "a still wallpaper gets no video caption in the panel"
+  );
+  assert.ok(
+    !rows(oneByClass(body, "wallvia-panel")).some((s) => s.name === "播放视频壁纸"),
+    "…and no video switch"
+  );
+
+  plugin.settings.videoPath = makeVideoFile().file;
+  plugin.settings.videoWallpaper = true;
+  plugin.settings.videoMuted = true;
+  await plugin.apply();
+  plugin.panelInstance ? plugin.panelInstance.refresh() : plugin.panel.refresh();
+  await tick();
+
+  const panelEl = oneByClass(body, "wallvia-panel");
+  const videoRow = rows(panelEl).find((s) => s.name === "播放视频壁纸");
+  const muteRow = rows(panelEl).find((s) => s.name === "视频静音");
+  assert.ok(videoRow, "a video wallpaper offers the playback switch");
+  assert.ok(muteRow, "…and the mute switch, next to it (the panel is where effects are tuned)");
+  const note = oneByClass(panelEl, "wallvia-panel-note");
+  assert.ok(note, "…and says whether the video is playing");
+  assert.ok(/播放中/.test(note.textContent), "…which it is");
+
+  muteRow.control("toggle").fire(false);
+  await tick();
+  await tick();
+  assert.equal(plugin.settings.videoMuted, false, "the mute switch persists");
+
+  plugin.settings.videoWallpaper = false;
+  plugin.panel.refresh();
+  await tick();
+  assert.ok(
+    /已关闭播放/.test(oneByClass(oneByClass(body, "wallvia-panel"), "wallvia-panel-note").textContent),
+    "turning playback off is visible in the panel, not just in the workspace"
+  );
+  plugin.settings.videoPath = "";
+  plugin.settings.videoWallpaper = true;
+  plugin.settings.videoMuted = true;
+  await plugin.apply();
+  plugin.panel.refresh();
+  await tick();
 
   // --- unload leaves no orphan button -----------------------------------
   plugin.onunload();
