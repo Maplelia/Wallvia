@@ -4,7 +4,8 @@
 
 **Bring your Wallpaper Engine everywhere.**
 
-Turn an image from your vault, or a wallpaper Wallpaper Engine has already downloaded, into the Obsidian workspace background 鈥?the editor, the sidebars and embedded web pages all become glass, on dark and light themes alike.
+Turn an image from your vault, or a wallpaper Wallpaper Engine has already downloaded, into the Obsidian workspace background —
+the editor, the sidebars and embedded web pages all become glass, on dark and light themes alike.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
 ![Version](https://img.shields.io/badge/version-1.0.1-blue)
@@ -12,7 +13,7 @@ Turn an image from your vault, or a wallpaper Wallpaper Engine has already downl
 ![Install](https://img.shields.io/badge/install-BRAT%20%7C%20manual-3c873a)
 ![Wallpaper Engine](https://img.shields.io/badge/Wallpaper%20Engine-local%20library-3c873a)
 
-English 路 [涓枃](README.zh.md)
+English · [中文](README.zh.md)
 
 </div>
 
@@ -23,7 +24,7 @@ English 路 [涓枃](README.zh.md)
 | Item | Detail |
 |:--|:--|
 | Plugin ID | `wallvia` |
-| Current version | `1.0.1` |
+| Current version | `1.0.0` |
 | Minimum version | Obsidian `1.4.0` |
 | Wallpaper Engine | Windows desktop |
 | Source location | `obsidian/` in the repository root |
@@ -51,11 +52,11 @@ English 路 [涓枃](README.zh.md)
 
 | | Feature |
 |:--|:--|
-| 馃柤锔?| Pick an image from your vault, or choose one of the wallpapers Wallpaper Engine has already downloaded |
-| 馃З | The wallpaper list reflows into columns to fit the window width, with search, arrow-key selection and a native-resolution badge |
-| 馃獰 | Glass on the editor, both sidebars and the web panels a plugin embeds |
-| 馃寳 | Adapts to dark / light themes automatically |
-| 馃帥锔?| Adjustable Fit, Dim, Glass, Blur, image opacity, embed opacity and dim colour |
+| 🖼️ | Pick an image from your vault, or choose one of the wallpapers Wallpaper Engine has already downloaded |
+| 🧩 | The wallpaper list reflows into columns to fit the window width, with search, arrow-key selection and a native-resolution badge |
+| 🪟 | Glass on the editor, both sidebars and the web panels a plugin embeds |
+| 🌗 | Adapts to dark / light themes automatically |
+| 🎛️ | Adjustable Fit, Dim, Glass, Blur, image opacity, embed opacity and dim colour |
 
 ---
 
@@ -64,13 +65,13 @@ English 路 [涓枃](README.zh.md)
 ### BRAT
 
 1. Install [BRAT](https://github.com/TfTHacker/obsidian42-brat);
-2. **Settings 鈫?BRAT 鈫?Add Beta plugin**, and enter:
+2. **Settings → BRAT → Add Beta plugin**, and enter:
 
    ```text
    https://github.com/Maplelia/Wallvia
    ```
 
-3. Enable Wallvia under **Settings 鈫?Community plugins**.
+3. Enable Wallvia under **Settings → Community plugins**.
 
 ### Manual installation
 
@@ -117,7 +118,7 @@ The floating panel adjusts **Fit, Dim, Glass, embed opacity, Blur and image opac
 
 <sub>The wallpaper list: a 16:9 preview box, the native-resolution badge in the bottom-left corner, the type and source, and a badge for the one currently in use.</sub>
 
-Every card carries a 16:9 preview box (the image shown in full, never cropped), a **native-resolution** badge in the bottom-left corner, the title, a type and source such as `Scene 路 Workshop`, and an Apply button; the one currently in use has a "Current" badge in its top-right corner.
+Every card carries a 16:9 preview box (the image shown in full, never cropped), a **native-resolution** badge in the bottom-left corner, the title, a type and source such as `Scene · Workshop`, and an Apply button; the one currently in use has a "Current" badge in its top-right corner.
 
 | Action | Effect |
 |:--|:--|
@@ -129,7 +130,7 @@ Every card carries a 16:9 preview box (the image shown in full, never cropped), 
 
 ### Where the thumbnails come from
 
-Wallpaper Engine's own `preview.jpg` is **square** (801脳801 and 192脳192 measured on this machine), so squeezing it into a 16:9 box always leaves the background colour showing at the sides. Thumbnails are therefore taken in the order below, with the same rules as the VS Code version:
+Wallpaper Engine's own `preview.jpg` is **square** (801×801 and 192×192 measured on this machine), so squeezing it into a 16:9 box always leaves the background colour showing at the sides. Thumbnails are therefore taken in the order below, with the same rules as the VS Code version:
 
 | Priority | Source | Detail |
 |:--:|:--|:--|
@@ -146,8 +147,8 @@ The badge reports the size of **the image that will fill the workspace once appl
 
 | Type | Badge |
 |:--|:--|
-| Scene wallpaper | The size of the largest embedded PNG in `scene.pkg` (3840脳2160 and 7680脳4320 measured on this machine) |
-| Video wallpaper | The real frame size in the MP4 container (3830脳2160 and 3840脳2160 measured on this machine) |
+| Scene wallpaper | The size of the largest embedded PNG in `scene.pkg` (3840×2160 and 7680×4320 measured on this machine) |
+| Video wallpaper | The real frame size in the MP4 container (3830×2160 and 3840×2160 measured on this machine) |
 | A wallpaper with no larger asset | Not shown |
 
 When the long edge is under 1280 the badge turns red, warning that it will look soft filling the window.
@@ -163,13 +164,13 @@ When the long edge is under 1280 the badge turns red, warning that it will look 
 
 ## Video wallpapers
 
-The background layer is a CSS `background-image`, which cannot hold a video, so a video wallpaper is **a single still frame** too 鈥?but that frame is **a real frame from the video**, not the 192脳192 square preview.
+The background layer is a CSS `background-image`, which cannot hold a video, so a video wallpaper is **a single still frame** too — but that frame is **a real frame from the video**, not the 192×192 square preview.
 
 Decoding is done by the host's own Chromium: a hidden `<video>` attached to the document loads the `app://` asset URL, seeks to the 2-second mark, and the result is drawn to a canvas and exported as JPEG.
 
 > **No ffmpeg is needed**, nor any extra dependency or external program.
 
-Decoded frames are cached in the system temporary directory `wallvia-stills/` under the key `path + file size + modification time + width cap` (70鈥?20 KB each), so the second open is instant; the cache key is invalidated automatically once a Workshop item is updated.
+Decoded frames are cached in the system temporary directory `wallvia-stills/` under the key `path + file size + modification time + width cap` (70–120 KB each), so the second open is instant; the cache key is invalidated automatically once a Workshop item is updated.
 
 ---
 
@@ -215,26 +216,26 @@ So a workspace web page such as OpenCode can show the wallpaper through, while i
 |:--|:--|--:|
 | Enabled | On / off | On |
 | Fit | `cover` / `fill` / `center` | `cover` |
-| Dim | `0`鈥揱1` | `0.35` |
-| Glass | `0`鈥揱100` | `55` |
-| Blur | `0`鈥揱40` px | `10` |
-| Embed opacity | `0`鈥揱100` | `0` |
-| Image opacity | `0`鈥揱1` | `0.6` |
+| Dim | `0`–`1` | `0.35` |
+| Glass | `0`–`100` | `55` |
+| Blur | `0`–`40` px | `10` |
+| Embed opacity | `0`–`100` | `0` |
+| Image opacity | `0`–`1` | `0.6` |
 | Wash | `auto` / `dark` / `light` / custom | `auto` |
 | Native artwork from scene packages | On / off | On |
 | Video frame extraction | On / off | On |
-| Max source width | `0`鈥揱7680`, step `160` | `0` |
+| Max source width | `0`–`7680`, step `160` | `0` |
 | Cache directory | Vault path | `Wallpapers` |
 
-**Restore default effects** puts Fit, Dim, Glass, Blur, image opacity, embed opacity and Wash back to their defaults, but keeps the current wallpaper, the cache directory and the three **optional behaviour** switches below 鈥?they are not effects, and quietly turning 4K native artwork back on would be surprising.
+**Restore default effects** puts Fit, Dim, Glass, Blur, image opacity, embed opacity and Wash back to their defaults, but keeps the current wallpaper, the cache directory and the three **optional behaviour** switches below — they are not effects, and quietly turning 4K native artwork back on would be surprising.
 
 ### Optional behaviour
 
-#### Native artwork from scene packages 路 on by default
+#### Native artwork from scene packages · on by default
 
-Pulls the embedded PNG out of the `scene.pkg` mipmap chain and copies the bytes verbatim; built-in projects with no package are scanned folder by folder instead. Turning it off makes both the cards and the background fall back to the square `preview.*` 鈥?softer, but **never blank**.
+Pulls the embedded PNG out of the `scene.pkg` mipmap chain and copies the bytes verbatim; built-in projects with no package are scanned folder by folder instead. Turning it off makes both the cards and the background fall back to the square `preview.*` — softer, but **never blank**.
 
-#### Video frame extraction 路 on by default
+#### Video frame extraction · on by default
 
 Uses a real frame from the video as the thumbnail. Turning it off falls back to the square preview image; frames already cached are not deleted.
 
@@ -242,9 +243,9 @@ Uses a real frame from the video as the thumbnail. Turning it off falls back to 
 > All three platforms take the same path: an offscreen decode in the host's own Chromium to grab a frame,
 > **with no `ffmpeg` and no external program or dependency**.
 
-#### Max source width 路 default `0`
+#### Max source width · default `0`
 
-The width cap applied when the native artwork is taken, to hold down the VRAM footprint of 4K images (about 33 MB once 3840脳2160 is decoded).
+The width cap applied when the native artwork is taken, to hold down the VRAM footprint of 4K images (about 33 MB once 3840×2160 is decoded).
 
 | Value | Behaviour |
 |--:|:--|
@@ -253,12 +254,12 @@ The width cap applied when the native artwork is taken, to hold down the VRAM fo
 
 It **only picks a level and never rescales**: the bytes copied into the vault are always the level exactly as Wallpaper Engine has it. The value constrains the card thumbnails, the background native artwork and the video frame width at once, and it is part of the cache key (`0` and `1920` are stored separately and never mix).
 
-Measured on the same 7680脳4320 wallpaper:
+Measured on the same 7680×4320 wallpaper:
 
 | Setting | Size on disk |
 |--:|:--|
-| `1920` | 1920脳1080 |
-| `0` | 7680脳4320 |
+| `1920` | 1920×1080 |
+| `0` | 7680×4320 |
 
 ### Switches deliberately left out
 
@@ -286,7 +287,7 @@ That is lazy loading: it reads as far as you scroll. Scroll down and the rest ar
 
 **The badge takes a moment to appear**
 
-Parsing and the thumbnail share one trigger and only start once a card scrolls into view. A scene wallpaper has to read the whole `scene.pkg` (7鈥?0 MB each on this machine), while a video wallpaper reads only the file header; disk reads are serial, so one pass down the list fills everything in.
+Parsing and the thumbnail share one trigger and only start once a card scrolls into view. A scene wallpaper has to read the whole `scene.pkg` (7–10 MB each on this machine), while a video wallpaper reads only the file header; disk reads are serial, so one pass down the list fills everything in.
 
 **The background still looks blurry**
 
@@ -298,7 +299,7 @@ The picker supports Windows and Steam installs. Make sure Steam or Wallpaper Eng
 
 ## Uninstall and restore
 
-**Uninstall**: Settings 鈫?Community plugins 鈥?turn Wallvia off (or delete it), then remove `<your vault>/.obsidian/plugins/wallvia/`; if you installed it through BRAT, remove the beta plugin there instead.
+**Uninstall**: Settings → Community plugins — turn Wallvia off (or delete it), then remove `<your vault>/.obsidian/plugins/wallvia/`; if you installed it through BRAT, remove the beta plugin there instead.
 
 Restoration happens the moment the plugin is switched off: the injected style classes and CSS variables are all cleaned up in `onunload()`, Obsidian does not need a restart, and your notes, themes and CSS snippets have never been modified.
 
@@ -309,16 +310,16 @@ Restoration happens the moment the plugin is switched off: the injected style cl
 | `<vault>/.obsidian/plugins/wallvia/data.json` | Your settings | Delete it for a factory reset |
 | `<vault>/<cache directory>/` | The preview images copied from Wallpaper Engine, in `Wallpapers/` by default | Delete the whole directory when you no longer need it |
 
-Every file in the cache directory carries the plugin's own prefix, and **only one is kept at a time** 鈥?changing wallpaper deletes the previous preview it had copied. So even if you never clean up after uninstalling, at most one image is left; the plugin **never** touches your own files.
+Every file in the cache directory carries the plugin's own prefix, and **only one is kept at a time** — changing wallpaper deletes the previous preview it had copied. So even if you never clean up after uninstalling, at most one image is left; the plugin **never** touches your own files.
 
 ## Known limitations
 
 - **The Wallpaper Engine picker is desktop only**: that code is guarded by `Platform.isDesktop`, so in the mobile build it is entirely inert and loads no Node module. The plugin itself still works on mobile, except that it can only pick images from the vault.
-- **Animated content does not play**: Obsidian can only paint a static background 鈥?a scene wallpaper takes the original image inside the package and a video wallpaper a single still frame, and neither of them plays.
+- **Animated content does not play**: Obsidian can only paint a static background — a scene wallpaper takes the original image inside the package and a video wallpaper a single still frame, and neither of them plays.
 - **Built-in / web projects have no `scene.pkg`**: only the loose images in the project folder can be scanned, and if none can be used it falls back to the square `preview.*`; DXT-compressed textures cannot be decoded either, so they fall back to the square preview as well, with the preview box's background colour showing at the sides of the image.
-- **Disk reads on the first screen**: a scene wallpaper has to read the whole `scene.pkg` (7鈥?0 MB each on this machine), parsing only starts once a card enters the viewport, and disk reads are serial; after one pass down the list everything comes from the cache.
+- **Disk reads on the first screen**: a scene wallpaper has to read the whole `scene.pkg` (7–10 MB each on this machine), parsing only starts once a card enters the viewport, and disk reads are serial; after one pass down the list everything comes from the cache.
 - **Transparency for embedded web pages relies on "Transparent iframe"**: the glass layer is painted on `.workspace-leaf-content::before`, while the webview's own base colour is decided inside it, so the plugin can only accommodate it as far as it can.
-- **How the settings tab renders depends on the Obsidian version**: 1.13 and above use the official declarative settings, which settings search can find; 1.4鈥?.12 use the legacy `display()` rendering 鈥?the same features, but search cannot find them.
+- **How the settings tab renders depends on the Obsidian version**: 1.13 and above use the official declarative settings, which settings search can find; 1.4–1.12 use the legacy `display()` rendering — the same features, but search cannot find them.
 - **Obsidian 1.4.0 is the minimum requirement**, and the Wallpaper Engine wallpaper library needs the Windows desktop app; if you only use images from your vault as wallpapers, either platform works.
 
 ---

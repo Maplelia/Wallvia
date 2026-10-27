@@ -2,6 +2,8 @@
 //
 // Run: node tests/run-all.cjs
 (async () => {
+  console.log("== text encoding ==");
+  await require("./encoding.cjs")();
   console.log("== json manifests ==");
   await require("./validate-json.cjs");
   console.log("\n== committed artifacts vs sources ==");
