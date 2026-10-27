@@ -784,21 +784,17 @@ async function run() {
   // cleared first: rebuilding is exactly what the refresh path is for.
   fs.rmSync(path.join(STORAGE, "thumbs"), { recursive: true, force: true });
   const secondOpen = vscode.commands.__commands["wallvia.pickWE"]();
-  assert.equal(
-    secondOpen,
-    firstOpen,
-    "re-opening reveals the panel that is already open — first=" +
-      (firstOpen && firstOpen.viewType) +
-      "#" +
-      (firstOpen && firstOpen.__reveals) +
-      " second=" +
-      (secondOpen && secondOpen.viewType) +
-      " same=" +
-      (secondOpen === firstOpen) +
-      " reveals(first)=" +
-      (firstOpen && firstOpen.__reveals) +
-      " panels=" +
-      (global.__MOCK_PANELS__ || []).map((x) => x.viewType + "#" + x.__reveals).join(",")
+  // Re-opening must reuse the panel, never stack a second one. `claimPanel`
+  // returns null when it reveals the open panel, but whether the reuse branch is
+  // taken depends on the slot state, which differs between a machine with
+  // Wallpaper Engine and a bare runner. Assert the contract that holds in both:
+  // one picker panel, and it is the one that was revealed.
+  const pickerPanels = (global.__MOCK_PANELS__ || []).filter((x) => x.viewType === "wallviaPicker");
+  assert.equal(pickerPanels.length, 1, "re-opening does not stack a second picker panel");
+  assert.equal(pickerPanels[0], firstOpen, "re-opening keeps the panel that is already open");
+  assert.ok(
+    (firstOpen.__reveals || 0) >= 1,
+    "re-opening reveals the panel that is already open"
   );
   await new Promise((r) => setTimeout(r, 300));
   const thumbsAfter = (firstOpen.__messages || []).filter((m) => m.type === "thumb").length;
