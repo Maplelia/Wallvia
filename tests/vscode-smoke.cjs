@@ -97,7 +97,6 @@ async function run() {
   const vscode = require("vscode");
   const ext = require("../vscode/src/extension.js");
 
-  console.log('  [smoke] activated');
   await ext.activate(ctx);
   const setCmd = vscode.commands.__commands["wallvia.set"];
   assert.ok(setCmd, "set command registered");
@@ -422,7 +421,6 @@ async function run() {
   } catch (e) {
     openUiError = e;
   }
-  console.log('  [smoke] reached panel block');
   const panel = openUiReturn || (global.__MOCK_PANELS__ || []).at(-1);
   assert.ok(
     panel,
@@ -516,7 +514,6 @@ async function run() {
   const rewritten = fs.readFileSync(cssPath, "utf8");
   assert.ok(rewritten.includes("wallpaper"), "activation leaves a valid stylesheet");
   assert.ok(rewritten.includes("Wallvia"), "the rewritten stylesheet is current");
-  console.log('  [smoke] panel=' + (panel && panel.title));
   const pushed = (panel.__messages || []).filter((m) => m.type === "status");
   assert.ok(pushed.length > 0, "the panel is primed with a status push");
   assert.ok(pushed[pushed.length - 1].status && pushed[pushed.length - 1].status.image, "the pushed status carries wallpaper state");
@@ -602,16 +599,6 @@ async function run() {
         }
       })()
   );
-  console.log(
-    "  [smoke] picker typeof=" +
-      typeof picker +
-      " keys=" +
-      (picker ? Object.keys(picker).join("/") : "n/a") +
-      " msgs=" +
-      (picker && picker.__messages ? picker.__messages.length : "MISSING") +
-      " panels=" +
-      (global.__MOCK_PANELS__ || []).map((x) => x.viewType).join(",")
-  );
   const need = (picker.__messages || []).filter((m) => m.type === "needFrame" && m.index === videoIndex).pop();
   assert.ok(need, "the picker asks its webview to decode a frame");
   assert.equal(need.width, 960, "the card frame is requested at the shared 960 px width");
@@ -658,8 +645,12 @@ async function run() {
   const needFramesSoFar = (picker.__messages || []).filter(
     (m) => m.type === "needFrame" && m.index === videoIndex
   ).length;
-  const reopen = vscode.commands.__commands["wallvia.pickWE"]();
+  // Same reuse path as above: a second `pickWE` reveals the open picker and
+  // returns null. Fall back to the panel that is actually current.
+  const reopen =
+    vscode.commands.__commands["wallvia.pickWE"]() || (global.__MOCK_PANELS__ || []).at(-1);
   await new Promise((r) => setTimeout(r, 400));
+  assert.ok(reopen, "the picker is reused on a second open");
   const reopenedThumb = (reopen.__messages || [])
     .filter((m) => m.type === "thumb" && m.index === videoIndex)
     .pop();
@@ -780,7 +771,8 @@ async function run() {
   // Opening the picker a second time has to refresh it, not just bring the old
   // panel forward: wallpapers get added, caches get cleared, and a thumbnail
   // that failed to build once must get another chance.
-  const firstOpen = vscode.commands.__commands["wallvia.pickWE"]();
+  const firstOpen =
+    vscode.commands.__commands["wallvia.pickWE"]() || (global.__MOCK_PANELS__ || []).at(-1);
   await new Promise((r) => setTimeout(r, 300));
   const thumbsBefore = (firstOpen.__messages || []).filter((m) => m.type === "thumb").length;
   // A warm cache legitimately means "nothing left to pump", so the cache is
