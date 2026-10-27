@@ -97,6 +97,7 @@ async function run() {
   const vscode = require("vscode");
   const ext = require("../vscode/src/extension.js");
 
+  console.log('  [smoke] activated');
   await ext.activate(ctx);
   const setCmd = vscode.commands.__commands["wallvia.set"];
   assert.ok(setCmd, "set command registered");
@@ -421,6 +422,7 @@ async function run() {
   } catch (e) {
     openUiError = e;
   }
+  console.log('  [smoke] reached panel block');
   const panel = openUiReturn || (global.__MOCK_PANELS__ || []).at(-1);
   assert.ok(
     panel,
@@ -514,6 +516,7 @@ async function run() {
   const rewritten = fs.readFileSync(cssPath, "utf8");
   assert.ok(rewritten.includes("wallpaper"), "activation leaves a valid stylesheet");
   assert.ok(rewritten.includes("Wallvia"), "the rewritten stylesheet is current");
+  console.log('  [smoke] panel=' + (panel && panel.title));
   const pushed = (panel.__messages || []).filter((m) => m.type === "status");
   assert.ok(pushed.length > 0, "the panel is primed with a status push");
   assert.ok(pushed[pushed.length - 1].status && pushed[pushed.length - 1].status.image, "the pushed status carries wallpaper state");
