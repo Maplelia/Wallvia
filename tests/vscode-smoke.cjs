@@ -53,6 +53,13 @@ function jpegOfSize(width, height) {
   ]);
 }
 
+/** The picker panel, whether pickWE created it or reused it. */
+function currentPicker(returned) {
+  if (returned) return returned;
+  const panels = global.__MOCK_PANELS__ || [];
+  return panels.filter((p) => p.viewType === "wallviaPicker").at(-1) || null;
+}
+
 async function run() {
   const ROOT = path.join(__dirname, ".tmp-install");
   const APP = path.join(ROOT, "resources", "app");
@@ -421,7 +428,7 @@ async function run() {
   } catch (e) {
     openUiError = e;
   }
-  const panel = openUiReturn || (global.__MOCK_PANELS__ || []).at(-1);
+  const panel = openUiReturn || (global.__MOCK_PANELS__ || []).filter((p) => p.viewType === "wallviaSettings").at(-1) || null;
   assert.ok(
     panel,
     "openUI creates or reuses a webview panel — returned " +
@@ -580,7 +587,7 @@ async function run() {
   const pickerBefore = (global.__MOCK_PANELS__ || []).length;
   const pickerReturn = vscode.commands.__commands["wallvia.pickWE"]();
   await new Promise((r) => setTimeout(r, 400));
-  const picker = pickerReturn || (global.__MOCK_PANELS__ || []).at(-1);
+  const picker = currentPicker(pickerReturn);
   assert.ok(
     picker,
     "pickWE creates or reuses a picker panel — returned " +
@@ -647,8 +654,7 @@ async function run() {
   ).length;
   // Same reuse path as above: a second `pickWE` reveals the open picker and
   // returns null. Fall back to the panel that is actually current.
-  const reopen =
-    vscode.commands.__commands["wallvia.pickWE"]() || (global.__MOCK_PANELS__ || []).at(-1);
+  const reopen = currentPicker(vscode.commands.__commands["wallvia.pickWE"]());
   await new Promise((r) => setTimeout(r, 400));
   assert.ok(reopen, "the picker is reused on a second open");
   const reopenedThumb = (reopen.__messages || [])
@@ -771,8 +777,7 @@ async function run() {
   // Opening the picker a second time has to refresh it, not just bring the old
   // panel forward: wallpapers get added, caches get cleared, and a thumbnail
   // that failed to build once must get another chance.
-  const firstOpen =
-    vscode.commands.__commands["wallvia.pickWE"]() || (global.__MOCK_PANELS__ || []).at(-1);
+  const firstOpen = currentPicker(vscode.commands.__commands["wallvia.pickWE"]());
   await new Promise((r) => setTimeout(r, 300));
   const thumbsBefore = (firstOpen.__messages || []).filter((m) => m.type === "thumb").length;
   // A warm cache legitimately means "nothing left to pump", so the cache is
