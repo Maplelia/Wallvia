@@ -566,7 +566,20 @@ async function run() {
   //     trip needs the fixture's own 1920x1080 clip.
   process.env.WE_CONFIG = path.join(WE_ROOT, "config.json");
   weMod.resetWeCache();
-  const videoItems = ext.__internals.weEntries().items;
+  const weEntriesNow = ext.__internals.weEntries();
+  if (!weEntriesNow) {
+    console.error(
+      "  [we] WE_CONFIG=" +
+        process.env.WE_CONFIG +
+        " exists=" +
+        (process.env.WE_CONFIG ? fs.existsSync(process.env.WE_CONFIG) : "n/a") +
+        " root=" +
+        weMod.weRoot() +
+        " cwd=" +
+        process.cwd()
+    );
+  }
+  const videoItems = (weEntriesNow || { items: [] }).items;
   const videoIndex = videoItems.findIndex((i) => /\.mp4$/i.test(i.file || ""));
   assert.ok(videoIndex >= 0, "the fixture offers a video wallpaper");
   const videoEntry = videoItems[videoIndex];
