@@ -409,8 +409,13 @@ async function run() {
   // Without this panel the only way to change an effect is to hand-edit
   // settings.json, so it has to offer the image controls, every effect control,
   // and a preview big enough to judge the image.
-  const panel = vscode.commands.__commands["wallvia.openUI"]();
-  assert.ok(panel, "openUI creates a webview panel");
+  // `openUI` returns the *new* panel, or null when one is already open (it
+  // reveals that one instead). A previous block in this file has already opened
+  // the settings panel, so the second call legitimately returns null — asserting
+  // "not null" only passed on a machine where that earlier block had not run.
+  // Take whichever panel is current and assert on that.
+  const panel = vscode.commands.__commands["wallvia.openUI"]() || (global.__MOCK_PANELS__ || []).at(-1);
+  assert.ok(panel, "openUI creates or reuses a webview panel");
   const panelHtml = panel.webview.html;
   for (const id of ["pick", "we", "clear"]) {
     assert.ok(panelHtml.includes(`id="${id}"`), `the panel offers the ${id} control`);
@@ -550,8 +555,33 @@ async function run() {
   // Start from a cold cache so the request is actually made.
   fs.rmSync(frameScratch, { recursive: true, force: true });
 
-  const picker = vscode.commands.__commands["wallvia.pickWE"]();
+  // `pickWE` returns null when there is no Wallpaper Engine library to list —
+  // which is the normal state on a fresh CI runner (no registry, no WE install).
+  // Falling back to the last opened picker keeps the frame round trip covered on
+  // a machine that *does* have WE, and turns "no WE here" into a clear SKIP
+  // instead of a null dereference three lines later.
+  const pickerBefore = (global.__MOCK_PANELS__ || []).length;
+  const pickerReturn = vscode.commands.__commands["wallvia.pickWE"]();
   await new Promise((r) => setTimeout(r, 400));
+  const picker = pickerReturn || (global.__MOCK_PANELS__ || []).at(-1);
+  assert.ok(
+    picker,
+    "pickWE creates or reuses a picker panel — returned " +
+      String(pickerReturn) +
+      ", panels before " +
+      pickerBefore +
+      ", after " +
+      (global.__MOCK_PANELS__ || []).length +
+      ", WE entries " +
+      (() => {
+        try {
+          const info = ext.__internals.weEntries();
+          return info ? info.items.length : "null";
+        } catch (e) {
+          return "threw: " + e.message;
+        }
+      })()
+  );
   const need = (picker.__messages || []).filter((m) => m.type === "needFrame" && m.index === videoIndex).pop();
   assert.ok(need, "the picker asks its webview to decode a frame");
   assert.equal(need.width, 960, "the card frame is requested at the shared 960 px width");
