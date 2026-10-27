@@ -414,8 +414,25 @@ async function run() {
   // the settings panel, so the second call legitimately returns null — asserting
   // "not null" only passed on a machine where that earlier block had not run.
   // Take whichever panel is current and assert on that.
-  const panel = vscode.commands.__commands["wallvia.openUI"]() || (global.__MOCK_PANELS__ || []).at(-1);
-  assert.ok(panel, "openUI creates or reuses a webview panel");
+  let openUiError = null;
+  let openUiReturn;
+  try {
+    openUiReturn = vscode.commands.__commands["wallvia.openUI"]();
+  } catch (e) {
+    openUiError = e;
+  }
+  const panel = openUiReturn || (global.__MOCK_PANELS__ || []).at(-1);
+  assert.ok(
+    panel,
+    "openUI creates or reuses a webview panel — returned " +
+      String(openUiReturn) +
+      ", threw " +
+      (openUiError ? openUiError.stack : "nothing") +
+      ", mock panels " +
+      (global.__MOCK_PANELS__ || []).length +
+      ", settingsSlot reachable " +
+      typeof vscode.window.createWebviewPanel
+  );
   const panelHtml = panel.webview.html;
   for (const id of ["pick", "we", "clear"]) {
     assert.ok(panelHtml.includes(`id="${id}"`), `the panel offers the ${id} control`);
