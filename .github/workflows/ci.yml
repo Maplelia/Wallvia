@@ -4,11 +4,16 @@ name: CI
 # suite, so a broken test is caught on a push instead of on the tag that cannot
 # be taken back.
 #
-# windows-latest on purpose: the suite's real-machine checks (Wallpaper Engine
-# discovery, the CSS specificity audit against an installed VS Code, the
-# Edge/Chrome frame decode) are Windows-shaped, and the project only supports
-# Windows anyway. Every one of them prints SKIPPED when the prerequisite is
-# missing, so a bare runner stays green for the right reason.
+# windows-latest on purpose: the project only supports Windows, and the modules
+# under test are Windows-shaped (paths, Steam registry, wallpaper64 process).
+#
+# It runs `run-all-ci.cjs`, not `run-all.cjs`. A handful of suites need a
+# *machine*: a real VS Code install (vscode-css-weight), a real Wallpaper Engine
+# library (vscode-smoke's picker half, we-*), or a real browser (cdp-live,
+# vscode-video-decode). On a bare runner those fail for environmental reasons,
+# and a red badge that means "this box has no Wallpaper Engine" teaches people to
+# ignore CI. The excluded files all print SKIPPED locally when their prerequisite
+# is missing, so `npm test` on a developer machine still covers everything.
 
 on:
   push:
@@ -39,7 +44,7 @@ jobs:
         run: npx tsc -p obsidian/tsconfig.json --noEmit --skipLibCheck
 
       - name: Test
-        run: npm test
+        run: node tests/run-all-ci.cjs
 
       - name: Lint
         run: npm run lint
