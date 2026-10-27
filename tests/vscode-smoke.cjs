@@ -784,7 +784,22 @@ async function run() {
   // cleared first: rebuilding is exactly what the refresh path is for.
   fs.rmSync(path.join(STORAGE, "thumbs"), { recursive: true, force: true });
   const secondOpen = vscode.commands.__commands["wallvia.pickWE"]();
-  assert.equal(secondOpen, firstOpen, "re-opening reveals the panel that is already open");
+  assert.equal(
+    secondOpen,
+    firstOpen,
+    "re-opening reveals the panel that is already open — first=" +
+      (firstOpen && firstOpen.viewType) +
+      "#" +
+      (firstOpen && firstOpen.__reveals) +
+      " second=" +
+      (secondOpen && secondOpen.viewType) +
+      " same=" +
+      (secondOpen === firstOpen) +
+      " reveals(first)=" +
+      (firstOpen && firstOpen.__reveals) +
+      " panels=" +
+      (global.__MOCK_PANELS__ || []).map((x) => x.viewType + "#" + x.__reveals).join(",")
+  );
   await new Promise((r) => setTimeout(r, 300));
   const thumbsAfter = (firstOpen.__messages || []).filter((m) => m.type === "thumb").length;
   assert.ok(
